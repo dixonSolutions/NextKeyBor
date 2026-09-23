@@ -32,7 +32,7 @@
 }
 .nkb-flat { min-width: 36px; min-height: 36px; padding: 0 6px; }
 
-.nkb-gif-button { font-size: 0.9em; letter-spacing: 1px; }
+.nkb-gif-button { font-size: 0.9em; letter-spacing: 1px; min-width: 52px; }
 
 .nkb-mic-box { spacing: 4px; }
 .nkb-mic-label { font-size: 0.75em; font-weight: bold; }

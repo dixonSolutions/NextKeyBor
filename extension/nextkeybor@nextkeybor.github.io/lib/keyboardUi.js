@@ -104,6 +104,7 @@ export class KeyboardUi {
                 this._syncVisibility();
             }, this);
         keyboard.connectObject('visibility-changed', () => {
+            console.log(`NextKeyBor: keyboard visible ${keyboard.visible}, panel ${this._panel?.constructor.name ?? 'none'}`);
             if (!keyboard.visible) {
                 this.closePanel();
                 this._flushLearn();
@@ -123,6 +124,8 @@ export class KeyboardUi {
         settings.connectObject('changed', (_s, key) => {
             if (key === 'speech-language')
                 this._syncMicLabel();
+            if (key === 'gif-provider' || key.endsWith('-api-key'))
+                this._syncVisibility();
             if (key === 'suggestions-enabled') {
                 this._syncVisibility();
                 this._ctrl?.setOskCompletion(Main.keyboard.visible)
@@ -333,6 +336,10 @@ export class KeyboardUi {
             b.opacity = available ? 255 : 100;
         }
         this._micButton.visible = !password;
+        // Openverse (used until a GIPHY/KLIPY/Tenor key is set) has no stickers.
+        const provider = this._settings.get_string('gif-provider');
+        this._stickerButton.visible = provider !== 'openverse' &&
+            this._settings.get_string(`${provider}-api-key`).length > 0;
         this._suggestionBox.visible = available && !password && !this._panel &&
             this._settings.get_boolean('suggestions-enabled');
         if (!this._suggestionBox.visible)

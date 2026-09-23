@@ -99,6 +99,7 @@ json g_favorites = json::array();   // items + {"file", "preview_file", "added"}
 json g_library = json::array();     // own items + {"file", "added", "tags"}
 std::set<std::string> g_fav_ids;
 std::map<std::string, std::string> g_tenor_pos;  // "kind|query|offset" -> next pos token
+std::set<std::string> g_fav_fetching;            // favourite ids with a download running
 int g_downloads_since_prune = 0;
 
 std::string favorites_path() { return join_path(data_dir(), "favorites.json"); }
@@ -480,7 +481,8 @@ void set_favorite(json item, bool fav) {
         item["preview_file"] = purl.empty() ? "" : pfile;
         // Reuse what is cached, fetch the rest in the background.
         std::string fc = full_cache_path(url), pc = purl.empty() ? "" : preview_cache_path(purl);
-        run_in_worker([url, purl, file, pfile, fc, pc] {
+        g_fav_fetching.insert(id);
+        run_in_worker([id, url, purl, file, pfile, fc, pc] {
             if (file_exists(fc))
                 copy_file(fc, file);
             else
@@ -491,7 +493,10 @@ void set_favorite(json item, bool fav) {
                 else
                     http_download(purl, pfile);
             }
-            run_on_main([] { Service::get().emit("FavoritesChanged", g_variant_new("()")); });
+            run_on_main([id] {
+                g_fav_fetching.erase(id);
+                Service::get().emit("FavoritesChanged", g_variant_new("()"));
+            });
         });
     }
     item.erase("preview");
@@ -500,7 +505,37 @@ void set_favorite(json item, bool fav) {
     save_favorites();
 }
 
+// Favourites are kept as local files so they work offline; fetch any copy
+// whose download failed earlier (for example while offline).
+void fetch_missing_favorites() {
+    for (const auto &f : g_favorites) {
+        std::string id = f.value("id", "");
+        if (f.value("source", "") == "local" || g_fav_fetching.count(id))
+            continue;
+        std::vector<std::pair<std::string, std::string>> todo;  // url -> file
+        for (auto [url_key, file_key] : {std::pair{"url", "file"}, std::pair{"preview_url", "preview_file"}}) {
+            std::string url = f.value(url_key, ""), file = f.value(file_key, "");
+            if (!url.empty() && !file.empty() && !file_exists(file))
+                todo.emplace_back(url, file);
+        }
+        if (todo.empty())
+            continue;
+        g_fav_fetching.insert(id);
+        run_in_worker([id, todo] {
+            bool got = false;
+            for (const auto &[url, file] : todo)
+                got |= http_download(url, file).ok();
+            run_on_main([id, got] {
+                g_fav_fetching.erase(id);
+                if (got)
+                    Service::get().emit("FavoritesChanged", g_variant_new("()"));
+            });
+        });
+    }
+}
+
 std::string list_favorites(const std::string &kind, const std::string &query) {
+    fetch_missing_favorites();
     json out = json::array();
     for (const auto &f : g_favorites) {
         if (!kind.empty() && f.value("kind", "gif") != kind)
@@ -699,6 +734,7 @@ json parse_item(const gchar *s) {
 void init() {
     load_state();
     prune_cache();
+    fetch_missing_favorites();
     auto &svc = Service::get();
     svc.on("SearchMedia", [](GVariant *params, GDBusMethodInvocation *inv) {
         const gchar *kind, *query;

@@ -36,8 +36,10 @@ function enableTouchScroll(scrollView, horizontal = false) {
             const delta = (horizontal ? x : y) - startCoord;
             if (!dragging && Math.abs(delta) > TOUCH_SCROLL_SLOP)
                 dragging = true;
-            if (dragging)
-                adjustment().value = startValue - delta;
+            const adj = adjustment();
+            const value = Math.clamp(startValue - delta, adj.lower, Math.max(adj.lower, adj.upper - adj.page_size));
+            if (dragging && Number.isFinite(value))
+                adj.value = value;
         } else if (type === Clutter.EventType.TOUCH_END ||
                    type === Clutter.EventType.TOUCH_CANCEL) {
             startCoord = null;
@@ -327,11 +329,20 @@ class MediaPanel extends Panel {
         box.add_child(this._grid);
         this.scrollView.child = box;
 
-        this.scrollView.vadjustment.connect('notify::value', () => this._maybeLoadMore());
+        this.scrollView.vadjustment.connect('notify::value', adj => {
+            // Diagnosing GIFs vanishing after they load (a NaN scroll position).
+            if (!Number.isFinite(adj.value)) {
+                console.trace(`NextKeyBor media: scroll value ${adj.value} (upper ${adj.upper}, page ${adj.page_size})`);
+                adj.value = 0;
+                return;
+            }
+            this._maybeLoadMore();
+        });
 
         daemon.connectObject(
             'MediaResults', (_d, requestId, json) => this._onResults(requestId, json),
             'MediaError', (_d, requestId, message) => {
+                console.log(`NextKeyBor media: error ${message}`);
                 if (requestId === this._requestId) {
                     this._loading = false;
                     this.showStatus(message);
@@ -388,6 +399,7 @@ class MediaPanel extends Panel {
         this._loading = false;
 
         if (this.tab === 'online') {
+            console.log(`NextKeyBor media: refresh ${this._kind} "${this.query}"`);
             this._clear();
             this._loadPage();
             return;
@@ -442,6 +454,8 @@ class MediaPanel extends Panel {
             return;
         }
         this._addItems(items);
+        console.log(`NextKeyBor media: +${items.length} = ${this._count}, grid ${this._grid.width}x${this._grid.height}, ` +
+            `view ${this.scrollView.width}x${this.scrollView.height}, mapped ${this.scrollView.mapped}`);
         // Fill the view if the first page was not enough to scroll.
         GLib.idle_add(GLib.PRIORITY_LOW, () => {
             this._maybeLoadMore();
