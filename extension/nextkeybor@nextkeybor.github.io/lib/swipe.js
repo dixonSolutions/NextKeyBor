@@ -6,7 +6,8 @@
 // see them before the keys and before other extensions listening on the
 // keyboard itself (TouchUp's swipe-down-to-close reacts after 25px, well
 // before a swipe is recognised). Keys only act on begin/end, so swallowing
-// the moves of a touch that started on a letter costs them nothing.
+// the moves of a touch that started on a letter costs them nothing; begin
+// and end always go through.
 
 import Cairo from 'cairo';
 import Clutter from 'gi://Clutter';
@@ -183,7 +184,11 @@ export class SwipeTyper {
             return Clutter.EVENT_PROPAGATE;
         }
         this._finish();
-        return Clutter.EVENT_STOP;
+        // Let the end through: the first key's press was cancelled, so the
+        // key ignores it, and other listeners (TouchUp's keyboard gestures)
+        // must see the touch end or they keep stale state, which crashed
+        // GNOME Shell once they used a key destroyed since.
+        return Clutter.EVENT_PROPAGATE;
     }
 
     _maybeStart(x, y) {
