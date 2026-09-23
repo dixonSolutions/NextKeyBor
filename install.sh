@@ -15,9 +15,8 @@ SCHEMADIR=$DATADIR/glib-2.0/schemas
 DBUSDIR=$DATADIR/dbus-1/services
 EXTDIR=$DATADIR/gnome-shell/extensions/$UUID
 
-# Older per-machine fixes that NextKeyBor replaces.
+# Older per-machine daemon that NextKeyBor replaces.
 OLD_DAEMON=osk-keyboard-daemon.service
-OLD_EXTENSIONS=(osk-tap-fix@surface.local auto-osk-focus@surface.local)
 
 say() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 
@@ -77,12 +76,8 @@ cp data/io.github.nextkeybor.gschema.xml "$EXTDIR/schemas/"
 cp data/io.github.nextkeybor.Daemon.xml "$EXTDIR/dbus/"
 glib-compile-schemas "$EXTDIR/schemas"
 
-for old in "${OLD_EXTENSIONS[@]}"; do
-    if gnome-extensions list --enabled 2>/dev/null | grep -qx "$old"; then
-        say "Disabling $old (NextKeyBor includes this fix)"
-        gnome-extensions disable "$old" || true
-    fi
-done
+# The extension disables osk-tap-fix itself when it first loads, so the
+# old fixes keep working until the next login.
 # The running shell does not know a freshly copied extension yet, so
 # `gnome-extensions enable` fails; add it to the enabled list directly.
 gnome-extensions enable "$UUID" 2>/dev/null || python3 - "$UUID" <<'PY'

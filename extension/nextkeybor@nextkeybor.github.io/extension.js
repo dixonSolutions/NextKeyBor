@@ -11,12 +11,23 @@ import {KeyboardUi} from './lib/keyboardUi.js';
 
 const MAX_HEIGHT_RATIO = 0.62;
 
+// Earlier single-purpose fixes that NextKeyBor includes; running both would
+// open the keyboard twice.
+const LEGACY_EXTENSIONS = ['osk-tap-fix@surface.local', 'auto-osk-focus@surface.local'];
+
 export default class NextKeyBorExtension extends Extension {
     enable() {
         this._settings = this.getSettings();
         this._daemon = new DaemonClient(this.dir);
         this._uis = new Map(); // Keyboard -> KeyboardUi
         this._tapFix = null;
+
+        for (const uuid of LEGACY_EXTENSIONS) {
+            if (global.settings.get_strv('enabled-extensions').includes(uuid)) {
+                console.log(`NextKeyBor: disabling ${uuid}, which it replaces`);
+                Main.extensionManager.disableExtension(uuid);
+            }
+        }
 
         this._patchKeyboard();
 
