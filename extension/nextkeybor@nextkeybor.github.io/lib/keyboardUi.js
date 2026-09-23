@@ -120,7 +120,6 @@ export class KeyboardUi {
         // Not notify::width: relayouts emit it too, and _layoutPanel relayouts.
         Main.layoutManager.connectObject('monitors-changed', () => this._layoutPanel(), this);
         keyboard.connectObject('visibility-changed', () => {
-            console.log(`NextKeyBor: keyboard visible ${keyboard.visible}, panel ${this._panel?.constructor.name ?? 'none'}`);
             if (!keyboard.visible) {
                 this.closePanel();
                 this._flushLearn();
@@ -577,8 +576,6 @@ export class KeyboardUi {
                 return;
             }
             const wasEnabled = ctrl._deleteEnabled;
-            console.log(`NextKeyBor backspace: ${enabled} was ${wasEnabled}, swipe ${!!this._swipeResult}, ` +
-                `terminal ${this._isTerminal()}, surrounding ${!!Main.inputMethod.getSurroundingText()[0]}`);
             // Backspace right after a swipe removes the whole swiped word.
             if (enabled && !wasEnabled && this._swipeResult) {
                 ctrl._deleteEnabled = true;
@@ -850,7 +847,6 @@ export class KeyboardUi {
         const context = this._context();
         const words = await this._daemon.swipeWords(context, '',
             JSON.stringify(keys), JSON.stringify(path), SWIPE_CHOICES);
-        console.log(`NextKeyBor swipe: ${path.length} points -> ${words.join(', ')}`);
         if (this._destroyed || words.length === 0)
             return;
         const cased = shifted ? words.map(w => w.charAt(0).toUpperCase() + w.slice(1)) : words;

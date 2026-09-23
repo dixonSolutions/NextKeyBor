@@ -147,10 +147,8 @@ export class SwipeTyper {
         const [x, y] = event.get_coords();
 
         if (type === T.TOUCH_BEGIN) {
-            if (this._slot !== null || !this._enabled()) {
-                console.log(`NextKeyBor swipe: begin ignored, slot ${this._slot}, enabled ${this._enabled()}`);
+            if (this._slot !== null || !this._enabled())
                 return Clutter.EVENT_PROPAGATE;
-            }
             const key = letterKeyOf(global.stage.get_event_actor(event));
             if (key && this._kb.contains(key)) {
                 this._slot = slot;
@@ -179,7 +177,6 @@ export class SwipeTyper {
 
         // TOUCH_END: a plain tap goes on to the key as usual.
         if (!this._swiping) {
-            this._loggedLong = false;
             this._reset();
             return Clutter.EVENT_PROPAGATE;
         }
@@ -194,12 +191,8 @@ export class SwipeTyper {
     _maybeStart(x, y) {
         const key = this._key;
         // Long-press already opened the extra characters popup: leave it be.
-        if (key._pressTimeoutId === 0) {
-            if (!this._loggedLong)
-                console.log(`NextKeyBor swipe: no swipe, long-press already fired (${this._points.length} points)`);
-            this._loggedLong = true;
+        if (key._pressTimeoutId === 0)
             return;
-        }
         const [kx, ky] = key.keyButton.get_transformed_position();
         const [width, height] = key.keyButton.get_transformed_size();
         const [x0, y0] = this._points[0];
