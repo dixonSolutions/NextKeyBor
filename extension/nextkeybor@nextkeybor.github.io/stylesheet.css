@@ -32,7 +32,7 @@
 }
 .nkb-flat { min-width: 36px; min-height: 36px; padding: 0 6px; }
 
-.nkb-gif-button { font-size: 0.9em; letter-spacing: 1px; min-width: 52px; }
+.nkb-gif-button { font-size: 0.9em; font-weight: 800; }
 
 .nkb-mic-box { spacing: 4px; }
 .nkb-mic-label { font-size: 0.75em; font-weight: bold; }
@@ -66,6 +66,7 @@
 .nkb-tab { min-width: 44px; padding: 0 12px; }
 
 .nkb-query {
+  width: 360px;
   spacing: 6px;
   padding: 0 6px 0 12px;
   min-height: 40px;
@@ -99,11 +100,30 @@
 }
 
 /* Emoji / symbols */
-.nkb-emoji-grid { padding: 4px; }
+.nkb-category-bar { spacing: 2px; }
+.nkb-category {
+  min-width: 44px;
+  min-height: 36px;
+  border-radius: 10px;
+  font-size: 1.25em;
+  color: #ffffff;
+}
+.nkb-category StIcon { icon-size: 18px; }
+.nkb-category:active { background-color: rgba(255, 255, 255, 0.12); }
+.nkb-category:checked { background-color: st-mix(-st-accent-color, #2e2e33, 60%); }
+.nkb-variant-bar {
+  spacing: 2px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  background-color: rgba(255, 255, 255, 0.08);
+}
+.nkb-emoji-grid { padding: 4px; spacing: 4px; }
+.nkb-emoji-row { spacing: 4px; }
 .nkb-emoji {
-  min-width: 52px;
-  min-height: 52px;
-  font-size: 1.9em;
+  /* One fixed size, so the grid lines up in even rows and columns. */
+  width: 46px;
+  height: 46px;
+  font-size: 1.6em;
   border-radius: 10px;
   color: #ffffff;
   background-color: transparent;
@@ -112,7 +132,8 @@
 .nkb-symbol { font-size: 1.6em; background-color: rgba(255, 255, 255, 0.05); }
 
 /* GIFs / stickers */
-.nkb-media-grid { padding: 2px; }
+.nkb-media-grid { padding: 2px; spacing: 6px; }
+.nkb-media-row { spacing: 6px; }
 .nkb-media-cell {
   border-radius: 10px;
   background-color: rgba(255, 255, 255, 0.05);

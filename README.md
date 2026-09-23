@@ -54,3 +54,15 @@ Everything stays on your machine unless you search for GIFs or stickers, which s
 ## Licence
 
 GPL-3.0-or-later. Word frequency lists come from [FrequencyWords](https://github.com/hermitdave/FrequencyWords) (CC-BY-SA 4.0) and are downloaded the first time each language is used.
+
+## Testing without logging out
+
+`tools/nested/` runs a second GNOME Shell with its own D-Bus session and a copy of your settings, loads the installed NextKeyBor, and drives it with touches through Mutter's remote desktop API:
+
+```bash
+./install.sh
+tools/nested/restart.sh /tmp/nkb                                   # session + a text box to type into
+tools/nested/drive.py /tmp/nkb 'tap 700 450; wait 1; shot /tmp/k.png'
+```
+
+With `mutter-devkit` installed (`sudo dnf install mutter-devkit`) the session also opens as a window you can use yourself.

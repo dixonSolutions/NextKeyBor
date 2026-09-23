@@ -4,6 +4,7 @@
 
 import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
+import Pango from 'gi://Pango';
 import St from 'gi://St';
 
 const LONG_PRESS_MS = 450;
@@ -120,6 +121,8 @@ export function labelButton(label, {styleClass = '', onTap, onLongPress} = {}) {
         can_focus: false,
         y_align: Clutter.ActorAlign.CENTER,
     });
+    // Short labels such as "GIF" must never collapse to an ellipsis.
+    button.get_child()?.clutter_text?.set_ellipsize(Pango.EllipsizeMode.NONE);
     connectTap(button, {onTap, onLongPress});
     return button;
 }

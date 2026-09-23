@@ -292,7 +292,17 @@ std::string wikimedia_sized(const std::string &url, int original_width, int widt
 
 json parse_openverse(const Query &q, const json &body) {
     json items = json::array();
+    // Callers page by item count, which need not be a multiple of our page
+    // size: skip what they already have, and stop past the last page.
+    unsigned page = q.offset / kOpenversePageSize + 1;
+    if (page > body.value("page_count", 0u))
+        return items;
+    unsigned skip = q.offset % kOpenversePageSize;
     for (const auto &r : body.value("results", json::array())) {
+        if (skip > 0) {
+            skip--;
+            continue;
+        }
         std::string url = r.value("url", "");
         if (url.empty())
             continue;
@@ -324,7 +334,7 @@ json run_query(const Query &q, std::string &error, std::string &tenor_next) {
               (q.tenor_pos.empty() ? "" : "&pos=" + url_escape(q.tenor_pos));
     } else if (q.provider == "openverse") {
         // No trending feed; show something lively for an empty query.
-        std::string terms = trending ? "funny animation" : q.query;
+        std::string terms = trending ? "animated" : q.query;
         url = "https://api.openverse.org/v1/images/?q=" + url_escape(terms) + "&extension=gif" +
               "&page_size=" + std::to_string(kOpenversePageSize) +
               "&page=" + std::to_string(q.offset / kOpenversePageSize + 1) +

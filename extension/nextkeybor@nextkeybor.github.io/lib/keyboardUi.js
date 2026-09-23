@@ -22,7 +22,11 @@ const LEARN_WORD_BATCH = 8;
 const MEDIA_READY_TIMEOUT_MS = 30000;
 const LONG_DELETE_MS = 600;
 const STRIP_RATIO = 0.6;
+// The keyboard, including an open panel, never covers more than this much of
+// the screen.
+export const MAX_HEIGHT_RATIO = 0.62;
 const SWIPE_CHOICES = 4;
+const SCREENSHOT_DELAY_MS = 250;
 
 const WORD_TAIL = /[\p{L}\p{N}_'’-]*$/u;
 const TERMINAL_WM_CLASS = /term|console|ptyxis|kitty|alacritty|wezterm|foot|konsole|tilix|terminator|blackbox|guake|tilda/i;
@@ -103,7 +107,8 @@ export class KeyboardUi {
                 this._resetText();
                 this._syncVisibility();
             }, this);
-        keyboard.connectObject('notify::width', () => this._layoutPanel(), this);
+        // Not notify::width: relayouts emit it too, and _layoutPanel relayouts.
+        Main.layoutManager.connectObject('monitors-changed', () => this._layoutPanel(), this);
         keyboard.connectObject('visibility-changed', () => {
             console.log(`NextKeyBor: keyboard visible ${keyboard.visible}, panel ${this._panel?.constructor.name ?? 'none'}`);
             if (!keyboard.visible) {
@@ -151,6 +156,7 @@ export class KeyboardUi {
             this._daemon.cancelDictation(this._dictation.id).catch(() => {});
 
         Main.inputMethod.disconnectObject(this);
+        Main.layoutManager.disconnectObject(this);
         this._daemon.disconnectObject(this);
         this._settings.disconnectObject(this);
 
@@ -176,6 +182,17 @@ export class KeyboardUi {
         }
         this.extraHeight = 0;
         this._kb = null;
+    }
+
+    // GNOME's own screenshot UI (area, window or screen; picture or video).
+    // Close the keyboard first so it is not in the shot.
+    _openScreenshotUi() {
+        this.closePanel();
+        this._kb.close(true);
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, SCREENSHOT_DELAY_MS, () => {
+            Main.screenshotUI.open().catch(e => console.error(`NextKeyBor: screenshot UI: ${e}`));
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     // ---- resize handle ---------------------------------------------------
@@ -296,9 +313,10 @@ export class KeyboardUi {
         this._center.add_child(this._statusLabel);
         this._toolbar.add_child(this._center);
 
-        this._emojiButton = iconButton('face-smile-symbolic', {
-            accessibleName: 'Search emoji and symbols',
-            onTap: () => this.togglePanel('emoji'),
+        // Emoji live on the keyboard's own emoji key (see extension.js).
+        this._screenshotButton = iconButton('camera-photo-symbolic', {
+            accessibleName: 'Take a screenshot or screen recording',
+            onTap: () => this._openScreenshotUi(),
         });
         this._gifButton = labelButton('GIF', {
             styleClass: 'nkb-gif-button',
@@ -312,7 +330,7 @@ export class KeyboardUi {
             accessibleName: 'NextKeyBor settings',
             onTap: () => this._openPreferences(),
         });
-        for (const b of [this._emojiButton, this._gifButton, this._stickerButton, this._settingsButton])
+        for (const b of [this._screenshotButton, this._gifButton, this._stickerButton, this._settingsButton])
             this._toolbar.add_child(b);
 
         kb.insert_child_at_index(this._toolbar, 0);
@@ -321,8 +339,9 @@ export class KeyboardUi {
         // of the way unless it has something to show.
         if (kb._suggestions) {
             const sync = () => {
-                kb._suggestions.visible = kb._suggestions.get_n_children() > 0;
+                kb._suggestions.visible = kb._suggestions.get_n_children() > 0 && !this._panel;
             };
+            this._syncStockSuggestions = sync;
             kb._suggestions.connectObject(
                 'child-added', sync, 'child-removed', sync, this);
             sync();
@@ -332,7 +351,7 @@ export class KeyboardUi {
     _syncVisibility() {
         const available = this._daemon.available;
         const password = this._isPassword();
-        for (const b of [this._micButton, this._emojiButton, this._gifButton, this._stickerButton]) {
+        for (const b of [this._micButton, this._gifButton, this._stickerButton]) {
             b.reactive = available;
             b.opacity = available ? 255 : 100;
         }
@@ -384,7 +403,10 @@ export class KeyboardUi {
         this.closePanel();
         let panel;
         if (name === 'emoji') {
-            panel = new EmojiPanel(this._daemon, {commit: str => this._commitToApp(str)});
+            panel = new EmojiPanel(this._daemon, {
+                commit: str => this._commitToApp(str),
+                sections: this._kb._emojiSelection?._sections ?? [],
+            });
         } else if (name === 'gif' || name === 'sticker') {
             panel = new MediaPanel(this._daemon, this._settings, {
                 kind: name,
@@ -405,11 +427,11 @@ export class KeyboardUi {
         this._panelHost.child = panel;
         this._panelHost.show();
 
-        setChecked(this._emojiButton, name === 'emoji');
         setChecked(this._gifButton, name === 'gif');
         setChecked(this._stickerButton, name === 'sticker');
         setChecked(this._langButton, name === 'language');
         this._syncVisibility();
+        this._syncStockSuggestions?.();
         this._layoutPanel();
     }
 
@@ -423,7 +445,8 @@ export class KeyboardUi {
         this._panelHost.child = null;
         panel.destroy();
         this._panelHost.hide();
-        for (const b of [this._emojiButton, this._gifButton, this._stickerButton, this._langButton])
+        this._syncStockSuggestions?.();
+        for (const b of [this._gifButton, this._stickerButton, this._langButton])
             setChecked(b, false);
         this._kb._aspectContainer?.show();
         this._setExtraHeight(0);
@@ -433,8 +456,17 @@ export class KeyboardUi {
 
     _layoutPanel() {
         const panel = this._panel;
-        if (!panel)
+        if (!panel || this._layingOut)
             return;
+        this._layingOut = true;
+        try {
+            this._layoutPanelNow(panel);
+        } finally {
+            this._layingOut = false;
+        }
+    }
+
+    _layoutPanelNow(panel) {
         // Pin the width: otherwise the panel takes its content's natural
         // width and the GIF grid never wraps (one row, thousands of px wide).
         const padding = this._panelHost.get_stage()
@@ -449,7 +481,11 @@ export class KeyboardUi {
         } else {
             this._kb._aspectContainer?.show();
             this._panelHost.y_expand = false;
-            const strip = Math.round(base * STRIP_RATIO);
+            // Only the room left under the height cap: a taller strip would
+            // push the keys off the bottom of the screen.
+            const monitor = Main.layoutManager.keyboardMonitor;
+            const room = monitor ? monitor.height * MAX_HEIGHT_RATIO - base : Infinity;
+            const strip = Math.max(0, Math.round(Math.min(base * STRIP_RATIO, room)));
             this._panelHost.height = strip;
             this._setExtraHeight(strip);
         }

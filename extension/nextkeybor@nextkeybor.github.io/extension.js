@@ -6,10 +6,8 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 import {DaemonClient} from './lib/daemon.js';
 import {TapFix, updateLevelFromHints} from './lib/fixes.js';
-import {augmentRow} from './lib/holds.js';
-import {KeyboardUi} from './lib/keyboardUi.js';
-
-const MAX_HEIGHT_RATIO = 0.62;
+import {augmentRow, centreSpaceBar} from './lib/holds.js';
+import {KeyboardUi, MAX_HEIGHT_RATIO} from './lib/keyboardUi.js';
 
 // Earlier single-purpose fixes that NextKeyBor includes; running both would
 // open the keyboard twice.
@@ -97,6 +95,7 @@ export default class NextKeyBorExtension extends Extension {
             _relayout: proto._relayout,
             _addRowKeys: proto._addRowKeys,
             _updateLevelFromHints: proto._updateLevelFromHints,
+            _toggleEmoji: proto._toggleEmoji,
         };
         const orig = this._orig;
 
@@ -123,7 +122,21 @@ export default class NextKeyBorExtension extends Extension {
             this.height = Math.min(base + extra, maxHeight);
         };
 
+        // The emoji key opens NextKeyBor's searchable picker instead.
+        proto._toggleEmoji = function (...args) {
+            const ui = ext._uis?.get(this);
+            if (ui)
+                ui.togglePanel('emoji');
+            else
+                orig._toggleEmoji.apply(this, args);
+        };
+
         proto._addRowKeys = function (keys, layout, ...rest) {
+            try {
+                centreSpaceBar(keys);
+            } catch (e) {
+                console.error(`NextKeyBor: space bar layout failed: ${e}`);
+            }
             if (settings.get_boolean('hold-for-numbers')) {
                 try {
                     augmentRow(keys, layout._nRows, layout.mode);

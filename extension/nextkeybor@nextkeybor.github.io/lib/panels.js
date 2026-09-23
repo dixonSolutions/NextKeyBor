@@ -48,6 +48,21 @@ function enableTouchScroll(scrollView, horizontal = false) {
     });
 }
 
+// After the new content is laid out; set right away, the adjustment still has
+// the old range and the view can open part-way down.
+function scrollToTop(scrollView) {
+    scrollView.vadjustment.value = 0;
+    GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+        scrollView.vadjustment.value = 0;
+        return GLib.SOURCE_REMOVE;
+    });
+}
+
+// An emoji without variation selectors, for comparing spellings.
+function bare(str) {
+    return str.replace(/[\uFE0E\uFE0F]/g, '');
+}
+
 function flowBox(styleClass) {
     return new St.Widget({
         style_class: styleClass,
@@ -90,7 +105,7 @@ const Panel = GObject.registerClass({
             header.add_child(button);
         }
 
-        const queryBox = new St.BoxLayout({style_class: 'nkb-query', x_expand: true});
+        const queryBox = new St.BoxLayout({style_class: 'nkb-query', x_align: Clutter.ActorAlign.CENTER});
         queryBox.add_child(new St.Icon({icon_name: 'system-search-symbolic', style_class: 'nkb-query-icon'}));
         this._queryLabel = new St.Label({
             x_expand: true,
@@ -105,7 +120,8 @@ const Panel = GObject.registerClass({
             onTap: () => this.setQuery(''),
         });
         queryBox.add_child(this._clearButton);
-        header.add_child(queryBox);
+        // Centred in the header rather than stretched across it.
+        header.add_child(new St.Bin({child: queryBox, x_expand: true}));
 
         this._extraHeader = new St.BoxLayout();
         header.add_child(this._extraHeader);
@@ -220,7 +236,9 @@ const Panel = GObject.registerClass({
 
 export const EmojiPanel = GObject.registerClass(
 class EmojiPanel extends Panel {
-    _init(daemon, {commit}) {
+    // sections: the stock keyboard's emoji categories ({label, keys: [{label,
+    // variants}]}), parsed by GNOME Shell from its own emoji.json.
+    _init(daemon, {commit, sections = []}) {
         super._init({
             placeholder: 'Search emoji',
             styleClass: 'nkb-emoji-panel',
@@ -232,13 +250,55 @@ class EmojiPanel extends Panel {
         this._daemon = daemon;
         this._commit = commit;
         this._serial = 0;
+        this._sections = sections.filter(s => s.keys?.length);
+        // Search and recents come from CLDR data, which also names plain
+        // symbols; keep only what GNOME lists as emoji.
+        this._known = new Set();
+        for (const s of this._sections) {
+            for (const k of s.keys) {
+                this._known.add(bare(k.label));
+                for (const v of k.variants ?? [])
+                    this._known.add(bare(v));
+            }
+        }
+        this._category = 'recent';
+
+        this._categoryBar = new St.BoxLayout({style_class: 'nkb-category-bar', x_align: Clutter.ActorAlign.CENTER});
+        this._categoryButtons = new Map();
+        const addCategory = (id, child, name) => {
+            const button = new St.Button({style_class: 'nkb-category', can_focus: false, accessible_name: name});
+            button.child = child;
+            connectTap(button, {onTap: () => this._showCategory(id)});
+            this._categoryButtons.set(id, button);
+            this._categoryBar.add_child(button);
+        };
+        addCategory('recent', new St.Icon({icon_name: 'document-open-recent-symbolic'}), 'Recent');
+        this._sections.forEach((s, i) => addCategory(i, new St.Label({text: s.label}), s.label));
+        this.insert_child_above(this._categoryBar, this.get_first_child());
+
+        this._variantBar = new St.BoxLayout({style_class: 'nkb-variant-bar', x_align: Clutter.ActorAlign.CENTER, visible: false});
+        this.insert_child_above(this._variantBar, this._categoryBar);
 
         const box = new St.BoxLayout({orientation: Clutter.Orientation.VERTICAL, x_expand: true});
         box.add_child(this.status);
-        this._grid = flowBox('nkb-emoji-grid');
+        // Explicit rows, not a FlowLayout: in a short panel the flow layout
+        // squeezed its rows to zero height and the emoji vanished.
+        this._grid = new St.BoxLayout({
+            style_class: 'nkb-emoji-grid',
+            orientation: Clutter.Orientation.VERTICAL,
+            x_align: Clutter.ActorAlign.CENTER,
+        });
         box.add_child(this._grid);
         this.scrollView.child = box;
         this.setTab('emoji');
+    }
+
+    _showCategory(id) {
+        this._category = id;
+        if (this.query)
+            this.setQuery(''); // refreshes
+        else
+            this.refresh();
     }
 
     async refresh() {
@@ -246,47 +306,114 @@ class EmojiPanel extends Panel {
         const symbols = this.tab === 'symbols';
         this._placeholder = symbols ? 'Search symbols (arrow, euro, degree…)' : 'Search emoji';
         this._syncQueryLabel();
-        let results;
-        try {
-            results = symbols
-                ? await this._daemon.searchSymbols(this.query, 120)
-                : await this._daemon.searchEmoji(this.query, 120);
-        } catch (e) {
-            if (serial === this._serial)
-                this.showStatus(`NextKeyBor daemon unavailable: ${e.message}`);
-            return;
+        this._variantBar.hide();
+        this._categoryBar.visible = !symbols;
+        for (const [id, button] of this._categoryButtons)
+            setChecked(button, !this.query && id === this._category);
+
+        let items; // [{char, name, variants}]
+        if (!symbols && !this.query && this._category !== 'recent') {
+            items = (this._sections[this._category]?.keys ?? [])
+                .map(k => ({char: k.label, name: '', variants: k.variants ?? []}));
+        } else {
+            let results;
+            try {
+                results = symbols
+                    ? await this._daemon.searchSymbols(this.query, 120)
+                    : await this._daemon.searchEmoji(this.query, 120);
+            } catch (e) {
+                if (serial === this._serial)
+                    this.showStatus(`NextKeyBor daemon unavailable: ${e.message}`);
+                return;
+            }
+            items = results
+                .map(r => ({char: symbols ? r.symbol : r.emoji, name: r.name ?? '', variants: []}))
+                .filter(i => i.char && (symbols || this._known.size === 0 || this._known.has(bare(i.char))));
         }
         if (serial !== this._serial)
             return;
-        this._grid.destroy_all_children();
-        this.showStatus(results.length ? '' : 'Nothing found');
-        for (const r of results) {
-            const char = symbols ? r.symbol : r.emoji;
-            if (!char)
-                continue;
-            const button = new St.Button({
-                style_class: `nkb-emoji ${symbols ? 'nkb-symbol' : ''}`,
-                label: char,
-                accessible_name: r.name ?? char,
-                can_focus: false,
-            });
-            connectTap(button, {
-                onTap: () => {
-                    this._commit(char);
-                    if (!symbols)
-                        this._daemon.noteEmojiUsed(char).catch(() => {});
-                },
-                onLongPress: () => this.showStatus(`${char}  ${r.name ?? ''}`),
-            });
-            this._grid.add_child(button);
+        // Nothing used yet: start on the first category instead of a blank grid.
+        if (!items.length && !symbols && !this.query && this._category === 'recent' && this._sections.length) {
+            this._showCategory(0);
+            return;
         }
-        this.scrollView.vadjustment.value = 0;
+        this.showStatus(items.length ? '' : 'Nothing found');
+        this._items = {items, symbols};
+        this._fillGrid();
+        scrollToTop(this.scrollView);
+    }
+
+    // Lays the current items out in rows that fit the panel's width.
+    _fillGrid() {
+        const {items = [], symbols = false} = this._items ?? {};
+        this._grid.destroy_all_children();
+        const scale = St.ThemeContext.get_for_stage(global.stage).scale_factor;
+        const width = this.width > 0 ? this.width : global.stage.width;
+        const columns = Math.max(1, Math.floor((width - 16 * scale) / (EMOJI_CELL * scale)));
+        let row = null;
+        items.forEach((item, i) => {
+            if (i % columns === 0) {
+                row = new St.BoxLayout({style_class: 'nkb-emoji-row'});
+                this._grid.add_child(row);
+            }
+            row.add_child(this._emojiButton(item, symbols));
+        });
+    }
+
+    vfunc_allocate(box) {
+        super.vfunc_allocate(box);
+        // Re-flow when the panel's width changes (rotation, resize).
+        const width = Math.round(box.get_width());
+        if (width !== this._flowWidth && this._items) {
+            this._flowWidth = width;
+            GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+                this._fillGrid();
+                return GLib.SOURCE_REMOVE;
+            });
+        }
+    }
+
+    _emojiButton({char, name, variants}, symbols) {
+        const button = new St.Button({
+            style_class: `nkb-emoji ${symbols ? 'nkb-symbol' : ''}`,
+            label: char,
+            accessible_name: name || char,
+            can_focus: false,
+        });
+        connectTap(button, {
+            onTap: () => this._pick(char, symbols),
+            // Skin tones and other variants, else the name.
+            onLongPress: () => variants.length > 1
+                ? this._showVariants(variants)
+                : this.showStatus(`${char}  ${name}`),
+        });
+        return button;
+    }
+
+    _showVariants(variants) {
+        this._variantBar.destroy_all_children();
+        for (const v of variants) {
+            const button = new St.Button({style_class: 'nkb-emoji', label: v, can_focus: false});
+            connectTap(button, {onTap: () => this._pick(v, false)});
+            this._variantBar.add_child(button);
+        }
+        this._variantBar.show();
+    }
+
+    _pick(char, symbols) {
+        this._commit(char);
+        if (!symbols)
+            this._daemon.noteEmojiUsed(char).catch(() => {});
     }
 });
 
 // ---------------------------------------------------------------------------
 
 const PAGE_LOAD_MARGIN = 240;
+// An emoji button (46px, see .nkb-emoji) plus the row spacing.
+const EMOJI_CELL = 50;
+const MEDIA_TILE_RATIO = 1.3; // tile width / height
+const MEDIA_SPACING = 6;
 
 export const MediaPanel = GObject.registerClass(
 class MediaPanel extends Panel {
@@ -325,7 +452,13 @@ class MediaPanel extends Panel {
 
         const box = new St.BoxLayout({orientation: Clutter.Orientation.VERTICAL, x_expand: true});
         box.add_child(this.status);
-        this._grid = flowBox('nkb-media-grid');
+        // Rows of equal tiles, laid out by hand (see EmojiPanel._fillGrid).
+        this._grid = new St.BoxLayout({
+            style_class: 'nkb-media-grid',
+            orientation: Clutter.Orientation.VERTICAL,
+            x_align: Clutter.ActorAlign.CENTER,
+        });
+        this._cells = [];
         box.add_child(this._grid);
         this.scrollView.child = box;
 
@@ -385,6 +518,7 @@ class MediaPanel extends Panel {
 
     _clear() {
         this._grid.destroy_all_children();
+        this._cells = [];
         this._thumbs.clear();
         this._count = 0;
         this._exhausted = false;
@@ -399,7 +533,6 @@ class MediaPanel extends Panel {
         this._loading = false;
 
         if (this.tab === 'online') {
-            console.log(`NextKeyBor media: refresh ${this._kind} "${this.query}"`);
             this._clear();
             this._loadPage();
             return;
@@ -454,8 +587,6 @@ class MediaPanel extends Panel {
             return;
         }
         this._addItems(items);
-        console.log(`NextKeyBor media: +${items.length} = ${this._count}, grid ${this._grid.width}x${this._grid.height}, ` +
-            `view ${this.scrollView.width}x${this.scrollView.height}, mapped ${this.scrollView.mapped}`);
         // Fill the view if the first page was not enough to scroll.
         GLib.idle_add(GLib.PRIORITY_LOW, () => {
             this._maybeLoadMore();
@@ -471,16 +602,66 @@ class MediaPanel extends Panel {
             this._loadPage();
     }
 
+    _tileSize() {
+        const scale = St.ThemeContext.get_for_stage(global.stage).scale_factor;
+        const height = (this.expanded ? 120 : 88) * scale;
+        return [Math.round(height * MEDIA_TILE_RATIO), height];
+    }
+
+    _columns() {
+        const scale = St.ThemeContext.get_for_stage(global.stage).scale_factor;
+        const width = this.width > 0 ? this.width : global.stage.width;
+        return Math.max(1, Math.floor((width - 16 * scale) / (this._tileSize()[0] + MEDIA_SPACING * scale)));
+    }
+
+    // Puts a tile in the last row, starting a new row when it is full.
+    _place(cell) {
+        let row = this._grid.get_last_child();
+        if (!row || row.get_n_children() >= this._columns()) {
+            row = new St.BoxLayout({style_class: 'nkb-media-row'});
+            this._grid.add_child(row);
+        }
+        row.add_child(cell);
+    }
+
+    _reflow() {
+        for (const cell of this._cells)
+            cell.get_parent()?.remove_child(cell);
+        this._grid.destroy_all_children();
+        for (const cell of this._cells)
+            this._place(cell);
+    }
+
+    vfunc_allocate(box) {
+        super.vfunc_allocate(box);
+        const width = Math.round(box.get_width());
+        if (width !== this._flowWidth) {
+            this._flowWidth = width;
+            GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+                this._reflow();
+                return GLib.SOURCE_REMOVE;
+            });
+        }
+    }
+
     _addItems(items) {
-        const height = this.expanded ? 120 : 88;
+        const [tileWidth, height] = this._tileSize();
         for (const item of items) {
             this._count++;
+            // A fixed tile; the GIF keeps its shape, centred and cropped.
             const cell = new St.Widget({
                 style_class: 'nkb-media-cell',
                 layout_manager: new Clutter.BinLayout(),
                 accessible_name: item.title ?? '',
+                width: tileWidth,
+                height,
+                clip_to_allocation: true,
             });
-            const image = new AnimatedImage({height});
+            const image = new AnimatedImage({
+                height,
+                x_align: Clutter.ActorAlign.CENTER,
+                y_align: Clutter.ActorAlign.CENTER,
+            });
             cell.add_child(image);
             if (item.preview)
                 image.setFile(item.preview);
@@ -506,7 +687,8 @@ class MediaPanel extends Panel {
                     this.showStatus(item.favorite ? 'Added to favourites' : 'Removed from favourites');
                 },
             });
-            this._grid.add_child(cell);
+            this._cells.push(cell);
+            this._place(cell);
         }
     }
 

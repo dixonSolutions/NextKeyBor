@@ -1,3 +1,5 @@
+// Layout tweaks on the layout JSON before the stock keyboard builds keys.
+//
 // Gboard-style long-press variants: digits on the top letter row, common
 // symbols on the other letter rows. Works on the layout JSON before the stock
 // keyboard turns it into keys; key.strings[0] is what a tap commits, the rest
@@ -51,4 +53,31 @@ export function augmentRow(keys, rowIndex, levelMode) {
                 addVariant(key, v);
         }
     }
+}
+
+// Widen the space bar and centre it: the stock letter rows put it left of
+// centre (the hide key is wider than ?123). Keys sit on a half-key grid, so
+// the outermost key on each side gets 1.5 and the others 1.
+export function centreSpaceBar(keys) {
+    const space = keys.findIndex(k => k.strings?.[0] === ' ');
+    if (space < 0 || (keys[space].width ?? 1) < 4)
+        return; // only the letter levels' wide space bar
+    const total = keys.reduce((sum, k) => sum + (k.width ?? 1), 0);
+    const left = keys.slice(0, space), right = keys.slice(space + 1);
+    const side = 1.5 + Math.max(left.length, right.length, 1) - 1;
+    const width = total - 2 * side;
+    if (width < (keys[space].width ?? 1))
+        return;
+    const fill = (group, outerFirst) => {
+        group.forEach((k, i) => {
+            k.width = (outerFirst ? i === 0 : i === group.length - 1) ? 1.5 : 1;
+        });
+        // A side with fewer keys takes the difference on its outer key.
+        const short = side - group.reduce((sum, k) => sum + k.width, 0);
+        if (group.length > 0 && short > 0)
+            group[outerFirst ? 0 : group.length - 1].width += short;
+    };
+    fill(left, true);
+    fill(right, false);
+    keys[space].width = width;
 }
