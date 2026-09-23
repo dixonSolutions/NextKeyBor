@@ -4,7 +4,7 @@ A smarter on-screen keyboard for GNOME on Wayland, made for touchscreens and 2-i
 
 NextKeyBor adds these to GNOME's built-in on-screen keyboard (OSK):
 
-- **🎤 Dictation:** speak and the text goes straight into the app. It runs locally with [whisper.cpp](https://github.com/ggml-org/whisper.cpp), and you can pick the language (or leave it on auto-detect).
+- **🎤 Dictation:** speak and the text goes straight into the app. It runs locally with [whisper.cpp](https://github.com/ggml-org/whisper.cpp), and you can pick the language (or leave it on auto-detect). Optionally, with [GroqType](https://github.com/dixonSolutions/GroqType) installed and a Groq API key set (in GroqType, or from NextKeyBor's settings), dictation uses Groq's cloud Whisper instead, falling back to the local model when offline.
 - **🌐 Languages:** switch the dictation language and your system keyboard layouts. It can also download spell-check dictionaries and language packs through PackageKit, the same system that GNOME Software uses.
 - **Autocomplete:** word completion, typo fixes and next-word prediction. It learns the words you type and keeps them only on your machine.
 - **Swipe typing:** slide across the letters and lift; a fading trail follows your finger. The best match is typed, the other matches wait in the suggestion bar, and backspace right after removes the whole word.

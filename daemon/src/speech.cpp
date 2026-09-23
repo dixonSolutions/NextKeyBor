@@ -10,6 +10,7 @@
 
 #include <csignal>
 #include <glib-unix.h>
+#include <glib/gstdio.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -157,6 +158,107 @@ std::string transcribe(const std::vector<float> &pcm, const std::string &languag
     }
     int lang_id = whisper_full_lang_id(ctx);
     detected = lang_id >= 0 ? whisper_lang_str(lang_id) : language;
+    return trim(text);
+}
+
+// ---- GroqType (optional) ----
+//
+// github.com/dixonSolutions/GroqType: cloud transcription with Groq's
+// Whisper through `groqtype transcribe FILE`, with its own config and API
+// key. Used when installed and configured, unless speech-engine says
+// otherwise; local whisper.cpp stays the fallback.
+
+std::string groqtype_path() {
+    gchar *found = g_find_program_in_path("groqtype");
+    std::string path = found ? found : "";
+    g_free(found);
+    if (path.empty()) {
+        // The user service's PATH may lack ~/.local/bin, where GroqType installs.
+        std::string local = join_path(join_path(g_get_home_dir(), ".local/bin"), "groqtype");
+        if (g_file_test(local.c_str(), G_FILE_TEST_IS_EXECUTABLE))
+            path = local;
+    }
+    return path;
+}
+
+bool groqtype_has_key() {
+    if (const char *env = g_getenv("GROQ_API_KEY"); env && *env)
+        return true;
+    const char *override = g_getenv("GROQTYPE_CONFIG");
+    std::string config = override && *override
+        ? override : join_path(join_path(g_get_user_config_dir(), "groqtype"), "config.json");
+    std::string text;
+    if (!read_file(config, text))
+        return false;
+    try {
+        return !json::parse(text).value("api_key", "").empty();
+    } catch (...) {
+        return false;
+    }
+}
+
+// "groqtype" or "whisper", from the speech-engine setting.
+std::string engine() {
+    std::string want = setting_string("speech-engine", "auto");
+    if (want == "whisper")
+        return "whisper";
+    if (want == "groqtype")
+        return "groqtype";
+    return !groqtype_path().empty() && groqtype_has_key() ? "groqtype" : "whisper";
+}
+
+bool write_wav(const std::string &path, const std::vector<float> &pcm) {
+    std::string out;
+    auto u32 = [&out](uint32_t v) { out.append(reinterpret_cast<const char *>(&v), 4); };
+    auto u16 = [&out](uint16_t v) { out.append(reinterpret_cast<const char *>(&v), 2); };
+    uint32_t bytes = static_cast<uint32_t>(pcm.size() * 2);
+    out += "RIFF";
+    u32(36 + bytes);
+    out += "WAVEfmt ";
+    u32(16);
+    u16(1);  // PCM
+    u16(1);  // mono
+    u32(kRate);
+    u32(kRate * 2);
+    u16(2);
+    u16(16);
+    out += "data";
+    u32(bytes);
+    for (float f : pcm)
+        u16(static_cast<uint16_t>(static_cast<int16_t>(std::lround(std::clamp(f, -1.0f, 1.0f) * 32767.0f))));
+    return g_file_set_contents(path.c_str(), out.data(), static_cast<gssize>(out.size()), nullptr);
+}
+
+std::string transcribe_groqtype(const std::vector<float> &pcm, const std::string &language, std::string &error) {
+    std::string program = groqtype_path();
+    if (program.empty()) {
+        error = "GroqType is not installed";
+        return "";
+    }
+    std::string wav = join_path(g_get_user_runtime_dir(), "nextkeybor-dictation-" + random_id() + ".wav");
+    if (!write_wav(wav, pcm)) {
+        error = "cannot write " + wav;
+        return "";
+    }
+    const gchar *argv[] = {program.c_str(), "transcribe", wav.c_str(), "--language", language.c_str(), nullptr};
+    gchar *out = nullptr, *err = nullptr;
+    gint status = 0;
+    GError *gerr = nullptr;
+    bool ran = g_spawn_sync(nullptr, const_cast<gchar **>(argv), nullptr, G_SPAWN_DEFAULT, nullptr, nullptr,
+                            &out, &err, &status, &gerr);
+    g_unlink(wav.c_str());
+    std::string text = out ? out : "", message = err ? trim(err) : "";
+    g_free(out);
+    g_free(err);
+    if (!ran) {
+        error = std::string("cannot run groqtype: ") + gerr->message;
+        g_error_free(gerr);
+        return "";
+    }
+    if (!g_spawn_check_wait_status(status, nullptr)) {
+        error = message.empty() ? "groqtype failed" : message;
+        return "";
+    }
     return trim(text);
 }
 
@@ -317,8 +419,19 @@ void finish_session(bool transcribe_it) {
     g_session = nullptr;
 
     run_in_worker([id, lang, pcm] {
-        std::string detected, error;
-        std::string text = transcribe(*pcm, lang, detected, error);
+        std::string detected, error, text;
+        if (engine() == "groqtype") {
+            text = transcribe_groqtype(*pcm, lang, error);
+            detected = lang;
+            // Offline or out of quota: fall back to the local model if present.
+            if (!error.empty() && file_exists(model_path(setting_string("speech-model", "base")))) {
+                g_message("groqtype: %s; using whisper.cpp", error.c_str());
+                error.clear();
+                text = transcribe(*pcm, lang, detected, error);
+            }
+        } else {
+            text = transcribe(*pcm, lang, detected, error);
+        }
         run_on_main([id, text, detected, error] {
             if (!error.empty())
                 emit_error(id, error);
@@ -351,12 +464,15 @@ std::string start(std::string language) {
                              on_readable, nullptr);
     emit_state(s->id, "recording");
 
-    // Load the model while the user speaks so transcription starts immediately.
-    run_in_worker([] {
-        std::lock_guard lock(g_ctx_mutex);
-        std::string err;
-        context_for(setting_string("speech-model", "base"), err);
-    });
+    // Load the model while the user speaks so transcription starts immediately
+    // (unless GroqType transcribes; no model download for nothing).
+    if (engine() == "whisper") {
+        run_in_worker([] {
+            std::lock_guard lock(g_ctx_mutex);
+            std::string err;
+            context_for(setting_string("speech-model", "base"), err);
+        });
+    }
     return s->id;
 }
 
@@ -406,6 +522,9 @@ json status() {
     std::string model = setting_string("speech-model", "base");
     return {{"model", model},
             {"model_ready", file_exists(model_path(model))},
+            {"engine", engine()},
+            {"groqtype_installed", !groqtype_path().empty()},
+            {"groqtype_key", groqtype_has_key()},
             {"recording", is_recording()},
             {"language", setting_string("speech-language", "auto")}};
 }

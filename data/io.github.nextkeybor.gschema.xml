@@ -11,6 +11,15 @@
       <default>['auto', 'en']</default>
       <summary>Languages shown first in the dictation language menu</summary>
     </key>
+    <key name="speech-engine" type="s">
+      <choices>
+        <choice value='auto'/>
+        <choice value='whisper'/>
+        <choice value='groqtype'/>
+      </choices>
+      <default>'auto'</default>
+      <summary>Dictation engine: auto (GroqType when installed with an API key, else local whisper.cpp), whisper or groqtype</summary>
+    </key>
     <key name="speech-model" type="s">
       <default>'base'</default>
       <summary>whisper.cpp model name (tiny, base, small, medium, large-v3-turbo, …)</summary>

@@ -11,6 +11,17 @@ const OBJECT_PATH = '/io/github/nextkeybor/Daemon';
 const MODELS = ['tiny', 'base', 'small', 'medium', 'large-v3-turbo', 'large-v3', 'tiny.en', 'base.en', 'small.en'];
 const PROVIDERS = [['openverse', 'Openverse (no key)'], ['giphy', 'GIPHY'], ['klipy', 'KLIPY'], ['tenor', 'Tenor']];
 const RATINGS = [['g', 'G'], ['pg', 'PG'], ['pg-13', 'PG-13'], ['r', 'R']];
+const ENGINES = [['auto', 'Automatic'], ['whisper', 'On this computer (whisper.cpp)'], ['groqtype', 'GroqType (Groq cloud)']];
+const GROQTYPE_URL = 'https://github.com/dixonSolutions/GroqType';
+
+// GroqType's CLI, wherever its installer put it.
+function groqtypePath() {
+    const found = GLib.find_program_in_path('groqtype');
+    if (found)
+        return found;
+    const local = GLib.build_filenamev([GLib.get_home_dir(), '.local', 'bin', 'groqtype']);
+    return GLib.file_test(local, GLib.FileTest.IS_EXECUTABLE) ? local : null;
+}
 
 function switchRow(settings, key, title, subtitle = '') {
     const row = new Adw.SwitchRow({title, subtitle});
@@ -86,11 +97,14 @@ export default class NextKeyBorPreferences extends ExtensionPreferences {
         statusGroup.add(kbRow);
         general.add(statusGroup);
 
+        // Filled in with the GroqType section on the Dictation page.
+        let syncGroq = () => {};
         const updateStatus = async () => {
             try {
                 const [json] = await callDaemon('GetStatus');
                 const s = JSON.parse(json);
                 const speech = s.speech ?? {};
+                syncGroq(speech);
                 statusRow.subtitle = [
                     `Running · v${s.version ?? '?'}`,
                     `speech model ${speech.model ?? '?'}${speech.model_ready ? '' : ' (not downloaded)'}`,
@@ -168,6 +182,53 @@ export default class NextKeyBorPreferences extends ExtensionPreferences {
         sp.add(spinRow(settings, 'speech-max-seconds', 'Maximum length (seconds)', 5, 600));
         sp.add(switchRow(settings, 'speech-silence-stop', 'Stop after a pause'));
         speech.add(sp);
+
+        // GroqType: optional cloud transcription; its key lives in its config.
+        const groq = new Adw.PreferencesGroup({
+            title: 'Cloud transcription with GroqType',
+            description: 'Faster and more accurate than a local model, if GroqType is installed and has a Groq API key. ' +
+                'Audio is then sent to Groq. Without it, dictation stays on this computer.',
+        });
+        groq.add(comboRow(settings, 'speech-engine', 'Engine', ENGINES,
+            'Automatic uses GroqType when it is set up, else the local model'));
+        const groqStatus = new Adw.ActionRow({title: 'GroqType', subtitle: 'Checking…'});
+        const groqLink = new Gtk.Button({label: 'Get GroqType', valign: Gtk.Align.CENTER});
+        groqLink.connect('clicked', () =>
+            new Gtk.UriLauncher({uri: GROQTYPE_URL}).launch(window, null, null));
+        groqStatus.add_suffix(groqLink);
+        groq.add(groqStatus);
+        const groqKey = new Adw.PasswordEntryRow({
+            title: 'Groq API key (saved in GroqType’s config)',
+            show_apply_button: true,
+        });
+        groqKey.connect('apply', () => {
+            const program = groqtypePath();
+            const key = groqKey.text.trim();
+            if (!program || !key)
+                return;
+            const proc = Gio.Subprocess.new([program, 'config', 'api-key', key],
+                Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_PIPE);
+            proc.communicate_utf8_async(null, null, (p, res) => {
+                const [, , err] = p.communicate_utf8_finish(res);
+                groqKey.text = '';
+                groqStatus.subtitle = p.get_successful() ? 'API key saved' : `Could not save the key: ${err?.trim()}`;
+                updateStatus();
+            });
+        });
+        groq.add(groqKey);
+        speech.add(groq);
+        syncGroq = speechStatus => {
+            const installed = !!groqtypePath();
+            groqLink.visible = !installed;
+            groqKey.sensitive = installed;
+            if (!installed)
+                groqStatus.subtitle = 'Not installed';
+            else if (!speechStatus.groqtype_key)
+                groqStatus.subtitle = 'Installed; needs a Groq API key (free at console.groq.com/keys)';
+            else
+                groqStatus.subtitle = `Ready · dictation uses ${speechStatus.engine === 'groqtype' ? 'GroqType' : 'the local model'}`;
+        };
+        updateStatus();
 
         // --- GIFs
         const gifs = new Adw.PreferencesPage({title: 'GIFs', icon_name: 'image-x-generic-symbolic'});
