@@ -30,6 +30,30 @@ void usage() {
 
 }  // namespace
 
+// GNOME's Bounce Keys ignores a key pressed again within its delay, which
+// swallows quick Backspace taps and double letters, from the on-screen
+// keyboard as much as from a real one. Keep it off unless the user tells
+// NextKeyBor not to (disable-bounce-keys).
+static void keep_bounce_keys_off() {
+    GSettingsSchemaSource *src = g_settings_schema_source_get_default();
+    GSettingsSchema *schema = src ? g_settings_schema_source_lookup(src, "org.gnome.desktop.a11y.keyboard", TRUE)
+                                  : nullptr;
+    if (!schema)
+        return;
+    g_settings_schema_unref(schema);
+    static GSettings *a11y = g_settings_new("org.gnome.desktop.a11y.keyboard");
+    auto enforce = +[](GSettings *, const gchar *, gpointer) {
+        if (nkb::setting_bool("disable-bounce-keys", true) && g_settings_get_boolean(a11y, "bouncekeys-enable")) {
+            g_message("turning off Bounce Keys (disable-bounce-keys)");
+            g_settings_set_boolean(a11y, "bouncekeys-enable", FALSE);
+        }
+    };
+    g_signal_connect(a11y, "changed::bouncekeys-enable", G_CALLBACK(enforce), nullptr);
+    if (nkb::settings())
+        g_signal_connect(nkb::settings(), "changed::disable-bounce-keys", G_CALLBACK(enforce), nullptr);
+    enforce(a11y, nullptr, nullptr);
+}
+
 int main(int argc, char **argv) {
     bool replace = false, manage_osk = true;
     for (int i = 1; i < argc; i++) {
@@ -89,6 +113,7 @@ int main(int argc, char **argv) {
         if (!started) {
             started = true;
             nkb::keyboard::init(manage_osk);
+            keep_bounce_keys_off();
         }
     });
 

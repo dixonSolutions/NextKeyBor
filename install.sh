@@ -67,6 +67,13 @@ fi
 systemctl --user enable nextkeybord.service
 systemctl --user restart nextkeybord.service
 
+# Bounce Keys drops quick repeated keys (Backspace taps, double letters);
+# the daemon keeps it off too (setting: disable-bounce-keys).
+if [[ $(gsettings get org.gnome.desktop.a11y.keyboard bouncekeys-enable 2>/dev/null) == true ]]; then
+    say "Turning off GNOME's Bounce Keys (it drops quick repeated key presses)"
+    gsettings set org.gnome.desktop.a11y.keyboard bouncekeys-enable false
+fi
+
 say "Installing GNOME Shell extension"
 rm -rf "$EXTDIR"
 mkdir -p "$EXTDIR"

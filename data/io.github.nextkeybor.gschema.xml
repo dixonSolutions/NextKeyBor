@@ -67,6 +67,10 @@
       <default>true</default>
       <summary>Stop the OSK latching Shift after backspace in apps that report no surrounding text</summary>
     </key>
+    <key name="disable-bounce-keys" type="b">
+      <default>true</default>
+      <summary>Keep GNOME's Bounce Keys off (it drops quick repeated keys, such as Backspace taps)</summary>
+    </key>
     <key name="chromium-tap-fix" type="b">
       <default>true</default>
       <summary>Open the OSK when tapping text fields in Chromium, Electron and Qt apps</summary>

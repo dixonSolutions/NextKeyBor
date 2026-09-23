@@ -111,6 +111,8 @@ export default class NextKeyBorPreferences extends ExtensionPreferences {
         updateStatus();
 
         const fixes = new Adw.PreferencesGroup({title: 'On-screen keyboard fixes'});
+        fixes.add(switchRow(settings, 'disable-bounce-keys', 'Keep Bounce Keys off',
+            'GNOME\u2019s Bounce Keys drops quick repeated keys, such as Backspace taps'));
         fixes.add(switchRow(settings, 'chromium-tap-fix', 'Open in Chromium, Electron and Qt apps',
             'Show the keyboard when tapping text fields that GNOME misses'));
         fixes.add(switchRow(settings, 'fix-auto-capitalization', 'Fix random capital letters',
