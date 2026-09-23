@@ -65,12 +65,36 @@ const TOUCH_DEVICE_TYPES = [
     Clutter.InputDeviceType.ERASER_DEVICE,
 ];
 
-function isOnAppWindow(actor) {
+function windowActorFor(actor) {
     for (let a = actor; a; a = a.get_parent()) {
         if (a instanceof Meta.WindowActor)
-            return true;
+            return a;
     }
-    return false;
+    return null;
+}
+
+// Chromium never enables text-input-v3 inside its popup surfaces (extension
+// popups such as Bitwarden's, the omnibox dropdown), so no text input ever
+// gets focus there and the check below finds nothing. The popup does hold
+// keyboard focus, so the OSK's plain key events still reach it: open the OSK
+// on a tap in a browser popup anyway, and close it again with the popup.
+const POPUP_TYPES = [
+    Meta.WindowType.DROPDOWN_MENU,
+    Meta.WindowType.POPUP_MENU,
+    Meta.WindowType.MENU,
+    Meta.WindowType.COMBO,
+    Meta.WindowType.UTILITY,
+    Meta.WindowType.DIALOG,
+    Meta.WindowType.MODAL_DIALOG,
+];
+const BROWSER_CLASS = /chrom|brave|vivaldi|edge|opera/i;
+
+function browserPopup(window) {
+    if (!window || !POPUP_TYPES.includes(window.get_window_type()))
+        return false;
+    const classOf = w => `${w?.get_wm_class() ?? ''} ${w?.get_gtk_application_id() ?? ''} ${w?.get_sandboxed_app_id() ?? ''}`;
+    const parent = window.get_transient_for();
+    return BROWSER_CLASS.test(classOf(window)) || BROWSER_CLASS.test(classOf(parent));
 }
 
 // Mutter only raises the OSK for text-input-v3 version 1 clients when they
@@ -85,6 +109,7 @@ export class TapFix {
     }
 
     destroy() {
+        this._forgetPopup();
         global.stage.disconnect(this._eventId);
         this._eventId = 0;
         for (const id of this._timeouts)
@@ -102,25 +127,56 @@ export class TapFix {
         if (!TOUCH_DEVICE_TYPES.includes(deviceType))
             return Clutter.EVENT_PROPAGATE;
 
-        if (!isOnAppWindow(global.stage.get_event_actor(event)))
+        const windowActor = windowActorFor(global.stage.get_event_actor(event));
+        if (!windowActor)
             return Clutter.EVENT_PROPAGATE;
+        const window = windowActor.get_meta_window();
+        const popup = browserPopup(window);
 
-        for (const delay of CHECK_DELAYS_MS) {
+        CHECK_DELAYS_MS.forEach((delay, i) => {
+            const last = i === CHECK_DELAYS_MS.length - 1;
             const id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
                 this._timeouts.delete(id);
-                this._maybeOpen();
+                if (!this._maybeOpen() && popup && last)
+                    this._openForPopup(window);
                 return GLib.SOURCE_REMOVE;
             });
             this._timeouts.add(id);
-        }
+        });
         return Clutter.EVENT_PROPAGATE;
     }
 
+    // True when a text input has focus (the OSK is then open or opening).
     _maybeOpen() {
         // currentFocus is set by mutter's focus_in for a Wayland client's
         // enabled text input and cleared again on disable (blur).
-        if (!Main.inputMethod.currentFocus || Main.keyboard.visible)
+        if (!Main.inputMethod.currentFocus)
+            return false;
+        if (!Main.keyboard.visible)
+            Main.keyboard.open(Main.layoutManager.focusIndex);
+        return true;
+    }
+
+    _openForPopup(window) {
+        console.log(`NextKeyBor: tap in browser popup (type ${window.get_window_type()}, ` +
+            `class ${window.get_wm_class()}) with no text input focus; opening OSK`);
+        if (!Main.keyboard.visible)
+            Main.keyboard.open(Main.layoutManager.focusIndex);
+        if (this._popupWindow === window)
             return;
-        Main.keyboard.open(Main.layoutManager.focusIndex);
+        this._forgetPopup();
+        this._popupWindow = window;
+        this._popupUnmanagedId = window.connect('unmanaged', () => {
+            this._forgetPopup();
+            if (!Main.inputMethod.currentFocus)
+                Main.keyboard.close();
+        });
+    }
+
+    _forgetPopup() {
+        if (this._popupWindow && this._popupUnmanagedId)
+            this._popupWindow.disconnect(this._popupUnmanagedId);
+        this._popupWindow = null;
+        this._popupUnmanagedId = 0;
     }
 }
