@@ -74,11 +74,15 @@ function windowActorFor(actor) {
     return null;
 }
 
-// Chromium never enables text-input-v3 inside its popup surfaces (extension
-// popups such as Bitwarden's, the omnibox dropdown), so no text input ever
-// gets focus there and the check below finds nothing. The popup does hold
+// Chromium never enables text-input-v3 inside its popups (extension popups
+// such as Bitwarden's, the omnibox dropdown), so no text input ever gets
+// focus there and the check below finds nothing. The popup does hold
 // keyboard focus, so the OSK's plain key events still reach it: open the OSK
 // on a tap in a browser popup anyway, and close it again with the popup.
+//
+// On Wayland those popups are usually not windows of their own but a
+// subsurface of the browser window (a smaller surface actor next to the main
+// one); other browsers and older versions use popup windows.
 const POPUP_TYPES = [
     Meta.WindowType.DROPDOWN_MENU,
     Meta.WindowType.POPUP_MENU,
@@ -89,13 +93,27 @@ const POPUP_TYPES = [
     Meta.WindowType.MODAL_DIALOG,
 ];
 const BROWSER_CLASS = /chrom|brave|vivaldi|edge|opera/i;
+// A subsurface narrower than this share of the window is taken for a popup
+// (web content and video overlays span most of it).
+const POPUP_MAX_WIDTH = 0.7;
 
-function browserPopup(window) {
-    if (!window || !POPUP_TYPES.includes(window.get_window_type()))
-        return false;
+function isBrowser(window) {
     const classOf = w => `${w?.get_wm_class() ?? ''} ${w?.get_gtk_application_id() ?? ''} ${w?.get_sandboxed_app_id() ?? ''}`;
-    const parent = window.get_transient_for();
-    return BROWSER_CLASS.test(classOf(window)) || BROWSER_CLASS.test(classOf(parent));
+    return BROWSER_CLASS.test(classOf(window)) || BROWSER_CLASS.test(classOf(window?.get_transient_for()));
+}
+
+// The actor that goes away with the popup the tap landed in, or null.
+function browserPopup(window, windowActor, eventActor) {
+    if (!window || !isBrowser(window))
+        return null;
+    if (POPUP_TYPES.includes(window.get_window_type()))
+        return windowActor;
+    // MetaSurfaceActor is not in the typelib; go by the type name.
+    const container = eventActor?.get_parent();
+    if (!/^MetaSurfaceActor/.test(eventActor?.constructor.$gtype?.name ?? '') || !container ||
+        eventActor === container.get_first_child())
+        return null;
+    return eventActor.width < windowActor.width * POPUP_MAX_WIDTH ? eventActor : null;
 }
 
 // Keyboard.open() normally waits a moment before showing, and a focus-out
@@ -141,22 +159,16 @@ export class TapFix {
         const eventActor = global.stage.get_event_actor(event);
         const windowActor = windowActorFor(eventActor);
         const window = windowActor?.get_meta_window();
-        console.log(`NextKeyBor tap: actor ${eventActor}, window type ${window?.get_window_type()}, ` +
-            `class ${window?.get_wm_class()}, parent ${window?.get_transient_for()?.get_wm_class()}, ` +
-            `focus ${Main.inputMethod.currentFocus}, osk ${Main.keyboard.visible}`);
         if (!window)
             return Clutter.EVENT_PROPAGATE;
-        const popup = browserPopup(window);
+        const popup = browserPopup(window, windowActor, eventActor);
 
         CHECK_DELAYS_MS.forEach((delay, i) => {
             const last = i === CHECK_DELAYS_MS.length - 1;
             const id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
                 this._timeouts.delete(id);
-                const opened = this._maybeOpen();
-                if (last)
-                    console.log(`NextKeyBor tap check: focus ${Main.inputMethod.currentFocus}, popup ${popup}, osk ${Main.keyboard.visible}`);
-                if (!opened && popup && last)
-                    this._openForPopup(window);
+                if (!this._maybeOpen() && popup && last)
+                    this._openForPopup(popup);
                 return GLib.SOURCE_REMOVE;
             });
             this._timeouts.add(id);
@@ -174,25 +186,29 @@ export class TapFix {
         return true;
     }
 
-    _openForPopup(window) {
-        console.log(`NextKeyBor: tap in browser popup (type ${window.get_window_type()}, ` +
-            `class ${window.get_wm_class()}) with no text input focus; opening OSK`);
+    // popup: the actor that is destroyed or unmapped when the popup closes.
+    _openForPopup(popup) {
         openNow();
-        if (this._popupWindow === window)
+        if (this._popup === popup)
             return;
         this._forgetPopup();
-        this._popupWindow = window;
-        this._popupUnmanagedId = window.connect('unmanaged', () => {
-            this._forgetPopup();
-            if (!Main.inputMethod.currentFocus)
-                Main.keyboard.close();
-        });
+        this._popup = popup;
+        popup.connectObject(
+            'destroy', () => this._onPopupGone(),
+            'notify::mapped', () => {
+                if (!popup.mapped)
+                    this._onPopupGone();
+            }, this);
+    }
+
+    _onPopupGone() {
+        this._forgetPopup();
+        if (!Main.inputMethod.currentFocus)
+            Main.keyboard.close();
     }
 
     _forgetPopup() {
-        if (this._popupWindow && this._popupUnmanagedId)
-            this._popupWindow.disconnect(this._popupUnmanagedId);
-        this._popupWindow = null;
-        this._popupUnmanagedId = 0;
+        this._popup?.disconnectObject(this);
+        this._popup = null;
     }
 }

@@ -11,6 +11,7 @@ Commands (coordinates are pixels on the 1440x960 test monitor):
     swipe X,Y X,Y ...    one finger through the points, ~60 ms per segment
     hold X Y SECONDS     touch and hold
     key KEYSYM [N]       press and release a key (X keysym, e.g. 0xff08 BackSpace) N times
+    chord KEYSYM+KEYSYM  hold the keys down in order, then release (e.g. 0xffe3+0xffe1+0x79 Ctrl+Shift+Y)
     wait SECONDS
     shot FILE.png        screenshot
     text FILE            print what the test app (tools/nested/textapp.py) holds
@@ -98,6 +99,14 @@ class Driver:
                 self.rd.call_sync("NotifyKeyboardKeysym", GLib.Variant("(ub)", (keysym, state)), 0, 5000, None)
                 self.wait(0.01)
 
+    def chord(self, keysyms):
+        for keysym in keysyms:
+            self.rd.call_sync("NotifyKeyboardKeysym", GLib.Variant("(ub)", (keysym, True)), 0, 5000, None)
+            self.wait(0.03)
+        for keysym in reversed(keysyms):
+            self.rd.call_sync("NotifyKeyboardKeysym", GLib.Variant("(ub)", (keysym, False)), 0, 5000, None)
+            self.wait(0.03)
+
     def shot(self, path):
         subprocess.run(["gst-launch-1.0", "-q", "pipewiresrc", f"path={self.node}", "keepalive-time=100", "num-buffers=1",
                         "!", "videoconvert", "!", "pngenc", "!", "filesink", f"location={path}"],
@@ -124,6 +133,8 @@ def main():
             d.swipe(points(args))
         elif op == "key":
             d.key(int(args[0], 0), int(args[1]) if len(args) > 1 else 1)
+        elif op == "chord":
+            d.chord([int(k, 0) for k in args[0].split("+")])
         elif op == "wait":
             d.wait(float(args[0]))
         elif op == "shot":
