@@ -14,6 +14,10 @@ cat > "$dir/session.sh" <<INNER
 #!/usr/bin/env bash
 echo "\$DBUS_SESSION_BUS_ADDRESS" > "$dir/bus"
 gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled true
+# NKB_EXTENSIONS="['a@b', ...]" limits the test session to those extensions.
+if [[ -n "${NKB_EXTENSIONS:-}" ]]; then  # expanded when this file is written
+    gsettings set org.gnome.shell enabled-extensions "${NKB_EXTENSIONS:-}"
+fi
 exec gnome-shell --devkit --wayland --no-x11 --virtual-monitor 1440x960 \
     --wayland-display nkb-test
 INNER

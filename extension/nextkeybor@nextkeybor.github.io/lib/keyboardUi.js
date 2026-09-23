@@ -27,6 +27,8 @@ const STRIP_RATIO = 0.6;
 export const MAX_HEIGHT_RATIO = 0.62;
 const SWIPE_CHOICES = 4;
 const SCREENSHOT_DELAY_MS = 250;
+const KEY_GAP_MS = 15;
+const BOUNCE_MARGIN_MS = 30;
 
 const WORD_TAIL = /[\p{L}\p{N}_'’-]*$/u;
 const TERMINAL_WM_CLASS = /term|console|ptyxis|kitty|alacritty|wezterm|foot|konsole|tilix|terminator|blackbox|guake|tilda/i;
@@ -80,6 +82,9 @@ export class KeyboardUi {
         this.extraHeight = 0;
 
         this._swipeResult = null; // {text, lead, space, words} of the last swiped word
+        this._keyQueue = [];
+        this._keyQueueId = 0;
+        this._a11yKeyboard = new Gio.Settings({schema_id: 'org.gnome.desktop.a11y.keyboard'});
         this._swipeDelete = false;
 
         this._buildToolbar();
@@ -152,6 +157,9 @@ export class KeyboardUi {
         if (this._flashId)
             GLib.source_remove(this._flashId);
         this._flashId = 0;
+        if (this._keyQueueId)
+            GLib.source_remove(this._keyQueueId);
+        this._keyQueueId = 0;
         if (this._dictation.id && this._dictation.state === 'recording')
             this._daemon.cancelDictation(this._dictation.id).catch(() => {});
 
@@ -616,9 +624,43 @@ export class KeyboardUi {
         this._ctrl = null;
     }
 
-    _pressKey(keyval) {
-        this._orig.keyvalPress.call(this._ctrl, keyval);
-        this._orig.keyvalRelease.call(this._ctrl, keyval);
+    // Press and release keys one at a time from a queue, so a replacement
+    // word typed after Backspaces stays in order. With GNOME's Bounce Keys on
+    // (Accessibility > Typing), a key repeated within its delay is ignored,
+    // so repeats wait that long.
+    _pressKeys(keyvals) {
+        this._keyQueue.push(...keyvals);
+        if (!this._keyQueueId)
+            this._drainKeys();
+    }
+
+    _drainKeys(previous = null) {
+        const keyval = this._keyQueue.shift();
+        if (keyval === undefined || !this._ctrl) {
+            this._keyQueueId = 0;
+            return;
+        }
+        const wait = keyval === previous && this._a11yKeyboard.get_boolean('bouncekeys-enable')
+            ? this._a11yKeyboard.get_int('bouncekeys-delay') + BOUNCE_MARGIN_MS : 0;
+        const press = () => {
+            // Real timestamps: the stock keyvalPress uses the current event's
+            // time, which is 0 outside an input handler.
+            const device = this._ctrl._virtualDevice;
+            device.notify_keyval(GLib.get_monotonic_time(), keyval, Clutter.KeyState.PRESSED);
+            device.notify_keyval(GLib.get_monotonic_time(), keyval, Clutter.KeyState.RELEASED);
+            this._keyQueueId = GLib.timeout_add(GLib.PRIORITY_HIGH, KEY_GAP_MS, () => {
+                this._drainKeys(keyval);
+                return GLib.SOURCE_REMOVE;
+            });
+        };
+        if (wait > 0) {
+            this._keyQueueId = GLib.timeout_add(GLib.PRIORITY_HIGH, wait, () => {
+                press();
+                return GLib.SOURCE_REMOVE;
+            });
+        } else {
+            press();
+        }
     }
 
     // Commit into the focused app regardless of captured typing.
@@ -759,8 +801,7 @@ export class KeyboardUi {
         const viaKeys = len > 0 && !this._surroundingFresh();
         if (len > 0) {
             if (viaKeys) {
-                for (let i = 0; i < len; i++)
-                    this._pressKey(Clutter.KEY_BackSpace);
+                this._pressKeys(new Array(len).fill(Clutter.KEY_BackSpace));
             } else {
                 Main.inputMethod.delete_surrounding(-len, len);
             }
@@ -770,8 +811,7 @@ export class KeyboardUi {
         if (!text) {
             this._scheduleSuggest(SUGGEST_DELAY_MS);
         } else if (viaKeys) {
-            for (const ch of text)
-                this._pressKey(Clutter.unicode_to_keysym(ch.codePointAt(0)));
+            this._pressKeys([...text].map(ch => Clutter.unicode_to_keysym(ch.codePointAt(0))));
             this._onTextCommitted(text);
         } else {
             this._commitToApp(text);
