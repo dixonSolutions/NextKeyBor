@@ -2,6 +2,8 @@
 # Build and install NextKeyBor for the current user (no root needed).
 #   ./install.sh              build + install daemon, schema, services, extension
 #   ./install.sh --uninstall  remove everything this script installed
+#   ./install.sh --with-groqtype  also set up GroqType's CLI for cloud dictation
+#                             (optional; GROQ_API_KEY=... to save a key too)
 set -euo pipefail
 
 cd "$(dirname "$(readlink -f "$0")")"
@@ -36,6 +38,9 @@ uninstall() {
     fi
     say "Removed. User data is kept in $DATADIR/nextkeybor and ~/.cache/nextkeybor."
 }
+
+WITH_GROQTYPE=false
+[[ ${1:-} == --with-groqtype ]] && WITH_GROQTYPE=true
 
 if [[ ${1:-} == --uninstall ]]; then
     uninstall
@@ -99,6 +104,10 @@ for key, add in (('enabled-extensions', True), ('disabled-extensions', False)):
 Gio.Settings.sync()
 PY
 
+if $WITH_GROQTYPE; then
+    tools/setup-groqtype.sh "${GROQ_API_KEY:-}"
+fi
+
 cat <<EOF
 
 NextKeyBor is installed.
@@ -106,5 +115,6 @@ NextKeyBor is installed.
   * Download a speech model:  gdbus call --session -d io.github.nextkeybor.Daemon \\
         -o /io/github/nextkeybor/Daemon -m io.github.nextkeybor.Daemon.DownloadSpeechModel base
     (or use the language button on the keyboard).
-  * For online GIFs/stickers add a free API key:  gnome-extensions prefs $UUID
+  * GIF search works as is (Openverse); for GIPHY/KLIPY add a free API key:  gnome-extensions prefs $UUID
+  * Optional cloud dictation with GroqType:  ./install.sh --with-groqtype
 EOF
