@@ -89,12 +89,19 @@ const Panel = GObject.registerClass({
             y_expand: true,
         });
         this.query = '';
-        this.expanded = false;
+        // Full: the panel fills the keyboard and the keys are hidden, for
+        // browsing. Tapping the search box brings the keys back to type.
+        this.expanded = true;
         this._placeholder = placeholder;
         this._searchTimeoutId = 0;
 
         const header = new St.BoxLayout({style_class: 'nkb-panel-header', x_expand: true});
         this.add_child(header);
+        header.add_child(iconButton('window-close-symbolic', {
+            styleClass: 'nkb-flat',
+            accessibleName: 'Close',
+            onTap: () => this.emit('close-request'),
+        }));
 
         this._tabButtons = new Map();
         for (const {id, label, icon} of tabs) {
@@ -120,23 +127,20 @@ const Panel = GObject.registerClass({
             onTap: () => this.setQuery(''),
         });
         queryBox.add_child(this._clearButton);
+        // Hides the keys again after searching.
+        this._hideKeysButton = iconButton('go-down-symbolic', {
+            styleClass: 'nkb-flat',
+            accessibleName: 'Hide keyboard',
+            onTap: () => this.setExpanded(true),
+        });
+        queryBox.add_child(this._hideKeysButton);
+        connectTap(queryBox, {onTap: () => this.setExpanded(false)});
         // Centred in the header rather than stretched across it.
         header.add_child(new St.Bin({child: queryBox, x_expand: true}));
 
         this._extraHeader = new St.BoxLayout();
         header.add_child(this._extraHeader);
 
-        this._expandButton = iconButton('view-fullscreen-symbolic', {
-            styleClass: 'nkb-flat',
-            accessibleName: 'Expand',
-            onTap: () => this.setExpanded(!this.expanded),
-        });
-        header.add_child(this._expandButton);
-        header.add_child(iconButton('window-close-symbolic', {
-            styleClass: 'nkb-flat',
-            accessibleName: 'Close',
-            onTap: () => this.emit('close-request'),
-        }));
 
         this.scrollView = new St.ScrollView({
             style_class: 'nkb-panel-scroll',
@@ -153,6 +157,7 @@ const Panel = GObject.registerClass({
         this.status.clutter_text.line_wrap = true;
 
         this.connect('destroy', () => this._cancelSearch());
+        this._hideKeysButton.visible = !this.expanded;
         this._syncQueryLabel();
     }
 
@@ -164,8 +169,7 @@ const Panel = GObject.registerClass({
         if (this.expanded === expanded)
             return;
         this.expanded = expanded;
-        this._expandButton.child.icon_name = expanded
-            ? 'view-restore-symbolic' : 'view-fullscreen-symbolic';
+        this._hideKeysButton.visible = !expanded;
         this.emit('expanded-changed', expanded);
     }
 

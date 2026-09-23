@@ -482,10 +482,11 @@ export class KeyboardUi {
         panel.width = Math.max(0, this._kb.width - padding);
         const base = this._kb._nkbBaseHeight || this._kb.height;
         if (panel.expanded) {
+            // The panel takes the keys' place; the keyboard keeps its height.
             this._kb._aspectContainer?.hide();
             this._panelHost.y_expand = true;
             this._panelHost.height = -1;
-            this._setExtraHeight(Math.round(base * 0.5));
+            this._setExtraHeight(0);
         } else {
             this._kb._aspectContainer?.show();
             this._panelHost.y_expand = false;
