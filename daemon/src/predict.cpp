@@ -1,6 +1,7 @@
 #include "predict.h"
 
 #include <algorithm>
+#include <cmath>
 #include <map>
 #include <memory>
 #include <set>
@@ -18,6 +19,7 @@ struct Entry {
     std::string key;    // folded, for lookup
     std::string word;   // as it should be written
     double base;        // dictionary score
+    bool stem = false;  // in the hunspell word list (a real word, not just a frequent token)
 };
 
 class Model {
@@ -29,6 +31,8 @@ public:
     }
 
     std::vector<std::string> suggest(const std::string &context, unsigned max);
+    std::vector<std::string> swipe(const std::string &context, const std::map<gunichar, Point> &keys,
+                                   const std::vector<Point> &path, unsigned max);
     void learn(const std::string &text);
     void forget(const std::string &word);
     void build();
@@ -98,6 +102,16 @@ void Model::schedule_save() {
     }, this);
 }
 
+// Lower-case letters with inner apostrophes only: no names, no junk tokens.
+bool is_plain_word(const std::string &w) {
+    for (const gchar *p = w.c_str(); *p; p = g_utf8_next_char(p)) {
+        gunichar c = g_utf8_get_char(p);
+        if (!(g_unichar_isalpha(c) && g_unichar_islower(c)) && c != '\'')
+            return false;
+    }
+    return !w.empty() && w.front() != '\'' && w.back() != '\'';
+}
+
 void Model::build() {
     std::unordered_map<std::string, Entry> words;
 
@@ -116,7 +130,7 @@ void Model::build() {
             if (std::any_of(w.begin(), w.end(), [](char c) { return g_ascii_isdigit(c) || c == '.'; }))
                 continue;
             std::string key = fold(w);
-            auto [it, inserted] = words.emplace(key, Entry{key, w, 1.0});
+            auto [it, inserted] = words.emplace(key, Entry{key, w, 1.0, true});
             // "he" and "He" (helium) fold together: prefer the lower-case spelling.
             if (!inserted && g_unichar_islower(g_utf8_get_char(w.c_str())))
                 it->second.word = w;
@@ -142,8 +156,9 @@ void Model::build() {
             auto it = words.find(key);
             if (it != words.end()) {
                 it->second.base = std::max(it->second.base, s);
-            } else if (!have_dic || rank <= 3000) {
-                // Keep very common words even if the stem list lacks this inflection.
+            } else if (!have_dic || rank <= 3000 || (rank <= 20000 && is_plain_word(w))) {
+                // The stem list has no inflections ("typing", "worked"): take
+                // common words from the frequency list instead.
                 words.emplace(key, Entry{key, w, s});
             }
         }
@@ -374,6 +389,152 @@ std::vector<std::string> Model::suggest(const std::string &context, unsigned max
     return out;
 }
 
+// ---- swipe typing ----
+
+constexpr size_t kSwipeSamples = 48;
+constexpr double kSwipeEndRadius = 1.0;    // first/last letter within a key of the path ends
+constexpr double kSwipeLetterRadius = 0.9; // every letter passed at least this close
+constexpr double kSwipeSigma = 0.22;       // tolerated mean distance from the ideal path
+constexpr double kSwipeFreqWeight = 0.45;  // how much word frequency counts against shape
+constexpr double kSwipeNamePenalty = 1.0;  // rare capitalised words (names) the user never typed
+
+double path_length(const std::vector<Point> &pts) {
+    double total = 0;
+    for (size_t i = 1; i < pts.size(); i++)
+        total += std::hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    return total;
+}
+
+// n points evenly spaced along the path.
+std::vector<Point> resample(const std::vector<Point> &in, size_t n) {
+    double total = path_length(in);
+    if (in.size() < 2 || total <= 0)
+        return std::vector<Point>(n, in.empty() ? Point{0, 0} : in.front());
+    double step = total / static_cast<double>(n - 1), acc = 0;
+    std::vector<Point> out{in.front()};
+    Point prev = in.front();
+    size_t i = 1;
+    while (i < in.size() && out.size() < n - 1) {
+        double d = std::hypot(in[i].x - prev.x, in[i].y - prev.y);
+        if (d > 0 && acc + d >= step) {
+            double t = (step - acc) / d;
+            prev = {prev.x + t * (in[i].x - prev.x), prev.y + t * (in[i].y - prev.y)};
+            out.push_back(prev);
+            acc = 0;
+        } else {
+            acc += d;
+            prev = in[i++];
+        }
+    }
+    while (out.size() < n)
+        out.push_back(in.back());
+    return out;
+}
+
+std::vector<std::string> Model::swipe(const std::string &context, const std::map<gunichar, Point> &keys,
+                                      const std::vector<Point> &raw, unsigned max) {
+    if (raw.size() < 2 || keys.empty())
+        return {};
+    const auto path = resample(raw, kSwipeSamples);
+    const Point start = raw.front(), end = raw.back();
+    const double user_len = path_length(raw);
+    auto dist = [](Point a, Point b) { return std::hypot(a.x - b.x, a.y - b.y); };
+
+    auto words = split_words(context);
+    std::string prev_key = words.empty() ? "" : fold(words.back());
+    auto bi = user_["bigrams"].find(prev_key);
+    const json *bigrams = !prev_key.empty() && bi != user_["bigrams"].end() ? &*bi : nullptr;
+
+    std::vector<std::pair<double, const Entry *>> scored;
+    std::vector<Point> ideal;
+    for (const auto &e : entries_) {
+        ideal.clear();
+        bool ok = true;
+        for (const gchar *p = e.key.c_str(); *p; p = g_utf8_next_char(p)) {
+            gunichar c = g_utf8_get_char(p);
+            auto it = keys.find(c);
+            if (it == keys.end()) {
+                if (c != '\'' && c != '-') {
+                    ok = false;  // a letter this layout lacks, or "mr." and the like
+                    break;
+                }
+                continue;  // apostrophes and hyphens are not on the letter keys
+            }
+            // Double letters are one stop on the path.
+            if (ideal.empty() || dist(ideal.back(), it->second) > 1e-6)
+                ideal.push_back(it->second);
+        }
+        if (!ok || ideal.size() < 2 || blocked_.count(e.key))
+            continue;
+        if (dist(ideal.front(), start) > kSwipeEndRadius || dist(ideal.back(), end) > kSwipeEndRadius)
+            continue;
+        double ideal_len = path_length(ideal);
+        if (std::abs(ideal_len - user_len) > 1.5 + 0.5 * std::max(ideal_len, user_len))
+            continue;
+        bool covered = std::all_of(ideal.begin(), ideal.end(), [&](const Point &k) {
+            return std::any_of(path.begin(), path.end(), [&](const Point &q) { return dist(q, k) <= kSwipeLetterRadius; });
+        });
+        if (!covered)
+            continue;
+
+        auto shape = resample(ideal, kSwipeSamples);
+        double d = 0;
+        for (size_t i = 0; i < kSwipeSamples; i++)
+            d += dist(shape[i], path[i]);
+        d /= kSwipeSamples;
+
+        double s = score(e);
+        if (bigrams) {
+            auto b = bigrams->find(e.word);
+            if (b != bigrams->end())
+                s += 2000.0 * b->get<double>();
+        }
+        double total = -(d * d) / (2 * kSwipeSigma * kSwipeSigma) + kSwipeFreqWeight * std::log1p(s);
+        if (s <= 1.0 && g_unichar_isupper(g_utf8_get_char(e.word.c_str())))
+            total -= kSwipeNamePenalty;
+        if (e.word.size() > 1 && e.word != "I" &&
+            std::none_of(e.word.begin(), e.word.end(), [](char c) { return g_ascii_islower(c); }))
+            total -= kSwipeNamePenalty;  // acronyms: "US", "USS"
+        scored.push_back({total, &e});
+    }
+
+    std::sort(scored.begin(), scored.end(), [](auto &a, auto &b) { return a.first > b.first; });
+    // "dont" and "don't" trace the same path: list it once, with the apostrophe.
+    auto letters = [](const std::string &w) {
+        std::string k = fold(w);
+        k.erase(std::remove_if(k.begin(), k.end(), [](char c) { return c == '\'' || c == '-'; }), k.end());
+        return k;
+    };
+    // Only when the plain spelling is not a dictionary word ("well" stays).
+    std::vector<const Entry *> picked;
+    std::map<std::string, size_t> seen;  // letters -> index in picked
+    for (auto &[s, e] : scored) {
+        std::string key = letters(e->word);
+        auto it = seen.find(key);
+        if (it != seen.end()) {
+            const Entry *&have = picked[it->second];
+            bool apostrophe = e->word.find('\'') != std::string::npos &&
+                              have->word.find('\'') == std::string::npos;
+            if (apostrophe && !have->stem)
+                have = e;
+            // Both real words ("cant" and "can't"): offer both.
+            if (!(apostrophe && have->stem && have != e) || picked.size() >= max)
+                continue;
+            picked.push_back(e);
+            continue;
+        }
+        // Once full, keep scanning only so an apostrophe spelling can still win.
+        if (picked.size() < max) {
+            seen.emplace(key, picked.size());
+            picked.push_back(e);
+        }
+    }
+    std::vector<std::string> out;
+    for (const Entry *e : picked)
+        out.push_back(e->word);
+    return out;
+}
+
 void Model::learn(const std::string &text) {
     if (!setting_bool("learn-words", true))
         return;
@@ -468,6 +629,12 @@ void learn(const std::string &text, const std::string &lang) {
     model_for(lang).learn(text);
 }
 
+std::vector<std::string> swipe(const std::string &context, const std::string &lang,
+                               const std::map<gunichar, Point> &keys, const std::vector<Point> &path,
+                               unsigned max) {
+    return model_for(lang).swipe(context, keys, path, std::clamp(max, 1u, 20u));
+}
+
 void reload(const std::string &lang) {
     g_models.erase(lang);
 }
@@ -481,6 +648,30 @@ void init() {
         std::vector<std::string> words;
         if (setting_bool("suggestions-enabled", true))
             words = suggest(context, lang, max ? max : 3);
+        GVariantBuilder b;
+        g_variant_builder_init(&b, G_VARIANT_TYPE("as"));
+        for (const auto &w : words)
+            g_variant_builder_add(&b, "s", w.c_str());
+        g_dbus_method_invocation_return_value(inv, g_variant_new("(as)", &b));
+    });
+    svc.on("SwipeWords", [](GVariant *params, GDBusMethodInvocation *inv) {
+        const gchar *context, *lang, *keys_json, *path_json;
+        guint32 max;
+        g_variant_get(params, "(&s&s&s&su)", &context, &lang, &keys_json, &path_json, &max);
+        std::map<gunichar, Point> keys;
+        std::vector<Point> path;
+        try {
+            json keys_in = json::parse(keys_json), path_in = json::parse(path_json);
+            for (auto &[k, v] : keys_in.items())
+                keys[g_unichar_tolower(g_utf8_get_char(k.c_str()))] = {v.at(0).get<double>(), v.at(1).get<double>()};
+            for (auto &p : path_in)
+                path.push_back({p.at(0).get<double>(), p.at(1).get<double>()});
+        } catch (const std::exception &e) {
+            g_dbus_method_invocation_return_error(inv, G_DBUS_ERROR, G_DBUS_ERROR_INVALID_ARGS,
+                                                  "bad swipe data: %s", e.what());
+            return;
+        }
+        auto words = swipe(context, lang, keys, path, max ? max : 4);
         GVariantBuilder b;
         g_variant_builder_init(&b, G_VARIANT_TYPE("as"));
         for (const auto &w : words)

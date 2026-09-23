@@ -12,6 +12,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import {waitForSignal} from './daemon.js';
 import {EmojiPanel, LanguagePanel, MediaPanel} from './panels.js';
+import {SwipeTyper} from './swipe.js';
 import {connectTap, iconButton, labelButton, setChecked} from './widgets.js';
 
 const MAX_SUGGESTIONS = 3;
@@ -21,6 +22,7 @@ const LEARN_WORD_BATCH = 8;
 const MEDIA_READY_TIMEOUT_MS = 30000;
 const LONG_DELETE_MS = 600;
 const STRIP_RATIO = 0.6;
+const SWIPE_CHOICES = 4;
 
 const WORD_TAIL = /[\p{L}\p{N}_'’-]*$/u;
 const TERMINAL_WM_CLASS = /term|console|ptyxis|kitty|alacritty|wezterm|foot|konsole|tilix|terminator|blackbox|guake|tilda/i;
@@ -73,9 +75,20 @@ export class KeyboardUi {
         this._dictation = {id: null, state: 'idle'};
         this.extraHeight = 0;
 
+        this._swipeResult = null; // {text, lead, space, words} of the last swiped word
+        this._swipeDelete = false;
+
         this._buildToolbar();
+        this._buildResizeHandle();
         this._buildPanelHost();
         this._hookController();
+
+        this._swipe = new SwipeTyper(keyboard, {
+            enabled: () => this._settings.get_boolean('swipe-typing') && !this._panel &&
+                this._daemon.available && !this._isPassword(),
+            onSwipe: (keys, path, shifted) => this._onSwipe(keys, path, shifted)
+                .catch(e => console.error(`NextKeyBor: swipe failed: ${e}`)),
+        });
 
         Main.inputMethod.connectObject('surrounding-text-set', () => {
             this._lastSurroundingTime = GLib.get_monotonic_time();
@@ -110,8 +123,11 @@ export class KeyboardUi {
         settings.connectObject('changed', (_s, key) => {
             if (key === 'speech-language')
                 this._syncMicLabel();
-            if (key === 'suggestions-enabled')
+            if (key === 'suggestions-enabled') {
                 this._syncVisibility();
+                this._ctrl?.setOskCompletion(Main.keyboard.visible)
+                    .catch(e => console.error(`NextKeyBor: OSK completion: ${e}`));
+            }
         }, this);
 
         this._syncMicLabel();
@@ -134,6 +150,8 @@ export class KeyboardUi {
         this._daemon.disconnectObject(this);
         this._settings.disconnectObject(this);
 
+        this._swipe.destroy();
+
         const kb = this._kb;
         const alive = !kb._nkbDestroyed;
         if (alive) {
@@ -142,7 +160,9 @@ export class KeyboardUi {
             kb.disconnectObject(this);
             this._unhookController();
             this.closePanel();
+            this._endResize();
             this._toolbar.destroy();
+            this._resizeStrip.destroy();
             this._panelHost.destroy();
             if (kb._suggestions) {
                 kb._suggestions.disconnectObject(this);
@@ -152,6 +172,73 @@ export class KeyboardUi {
         }
         this.extraHeight = 0;
         this._kb = null;
+    }
+
+    // ---- resize handle ---------------------------------------------------
+
+    // A strip on top of the keyboard; dragging it sets the keyboard height
+    // for the current orientation.
+    _buildResizeHandle() {
+        this._resizeStrip = new St.Widget({
+            style_class: 'nkb-resize-strip',
+            reactive: true,
+            x_expand: true,
+            layout_manager: new Clutter.BinLayout(),
+            accessible_name: 'Resize keyboard',
+        });
+        this._resizeStrip.add_child(new St.Widget({
+            style_class: 'nkb-resize-pill',
+            x_align: Clutter.ActorAlign.CENTER,
+            y_align: Clutter.ActorAlign.CENTER,
+        }));
+        this._resizeStrip.connect('event', (_a, event) => this._onResizeEvent(event));
+        this._resizeGrab = null;
+        this._kb.insert_child_at_index(this._resizeStrip, 0);
+    }
+
+    _onResizeEvent(event) {
+        const T = Clutter.EventType;
+        const type = event.type();
+        if (type === T.BUTTON_PRESS || type === T.TOUCH_BEGIN) {
+            if (!this._resizeGrab) {
+                this._resizeSlot = event.get_event_sequence()?.get_slot() ?? -1;
+                this._resizeGrab = global.stage.grab(this._resizeStrip);
+                this._resizeStrip.add_style_pseudo_class('active');
+            }
+            return Clutter.EVENT_STOP;
+        }
+        if (!this._resizeGrab)
+            return Clutter.EVENT_PROPAGATE;
+        if ((type === T.TOUCH_UPDATE || type === T.TOUCH_END || type === T.TOUCH_CANCEL) &&
+            (event.get_event_sequence()?.get_slot() ?? -1) !== this._resizeSlot)
+            return Clutter.EVENT_STOP;
+        if (type === T.MOTION || type === T.TOUCH_UPDATE) {
+            this._resizeTo(event.get_coords()[1]);
+        } else if (type === T.BUTTON_RELEASE || type === T.TOUCH_END || type === T.TOUCH_CANCEL) {
+            if (type !== T.TOUCH_CANCEL)
+                this._resizeTo(event.get_coords()[1]);
+            this._endResize();
+        }
+        return Clutter.EVENT_STOP;
+    }
+
+    _resizeTo(y) {
+        const monitor = Main.layoutManager.keyboardMonitor;
+        if (!monitor)
+            return;
+        // The keyboard sits on the bottom edge, so the finger marks its top.
+        const height = monitor.y + monitor.height - y - this.extraHeight;
+        const percent = Math.clamp(Math.round(height * 100 / monitor.height), 15, 60);
+        const key = monitor.width > monitor.height ? 'height-landscape' : 'height-portrait';
+        if (this._settings.get_int(key) !== percent)
+            this._settings.set_int(key, percent);
+    }
+
+    _endResize() {
+        this._resizeGrab?.dismiss();
+        this._resizeGrab = null;
+        this._resizeSlot = null;
+        this._resizeStrip?.remove_style_pseudo_class('active');
     }
 
     // ---- toolbar ---------------------------------------------------------
@@ -372,13 +459,24 @@ export class KeyboardUi {
             toggleDelete: ctrl.toggleDelete,
             keyvalPress: ctrl.keyvalPress,
             keyvalRelease: ctrl.keyvalRelease,
+            setOskCompletion: ctrl.setOskCompletion,
         };
+
+        // With OSK completion on, GNOME switches IBus to typing-booster, which
+        // holds the current word as preedit. That fights our suggestions
+        // (they replace text the app has, not the preedit), so keep it off
+        // while ours are enabled.
+        ctrl.setOskCompletion = enabled => this._orig.setOskCompletion.call(ctrl,
+            enabled && !this._settings.get_boolean('suggestions-enabled'));
+        ctrl.setOskCompletion(Main.keyboard.visible)
+            .catch(e => console.error(`NextKeyBor: OSK completion: ${e}`));
 
         ctrl.commit = (str, modifiers) => {
             if (this._panel?.capturesTyping) {
                 this._panel.typeText(str);
                 return Promise.resolve();
             }
+            this._swipeResult = null;
             const plain = !modifiers || modifiers.size === 0;
             const promise = this._orig.commit.call(ctrl, str, modifiers);
             if (plain)
@@ -396,7 +494,31 @@ export class KeyboardUi {
                 return;
             }
             const wasEnabled = ctrl._deleteEnabled;
-            this._orig.toggleDelete.call(ctrl, enabled);
+            // Backspace right after a swipe removes the whole swiped word.
+            if (enabled && !wasEnabled && this._swipeResult) {
+                ctrl._deleteEnabled = true;
+                this._swipeDelete = true;
+                this._undoSwipe();
+                return;
+            }
+            if (!enabled && this._swipeDelete) {
+                this._swipeDelete = false;
+                ctrl._deleteEnabled = false;
+                return;
+            }
+            // The stock tap handler enables and disables delete in one go,
+            // and apps reporting no surrounding text (terminals, Chromium)
+            // then never get the deletion it waits for. Send a real
+            // Backspace for them, as the stock code does for terminals.
+            if (enabled && !wasEnabled &&
+                (this._isTerminal() || !Main.inputMethod.getSurroundingText()[0])) {
+                ctrl._deleteEnabled = true;
+                ctrl._timesDeleted = 0;
+                this._orig.keyvalPress.call(ctrl, Clutter.KEY_BackSpace);
+                ctrl._backspacePressed = true;
+            } else {
+                this._orig.toggleDelete.call(ctrl, enabled);
+            }
             if (enabled && !wasEnabled) {
                 this._deletePressTime = GLib.get_monotonic_time();
                 this._onDeleted();
@@ -415,6 +537,7 @@ export class KeyboardUi {
                 this._panel.enter();
                 return;
             }
+            this._swipeResult = null;
             this._orig.keyvalPress.call(ctrl, keyval);
             if (keyval === Clutter.KEY_Return || keyval === Clutter.KEY_KP_Enter)
                 this._onTextCommitted('\n');
@@ -437,6 +560,8 @@ export class KeyboardUi {
             if (Object.prototype.hasOwnProperty.call(ctrl, name))
                 delete ctrl[name];
         }
+        ctrl.setOskCompletion(Main.keyboard.visible)
+            .catch(e => console.error(`NextKeyBor: OSK completion: ${e}`));
         this._ctrl = null;
     }
 
@@ -484,6 +609,7 @@ export class KeyboardUi {
     }
 
     _resetText() {
+        this._swipeResult = null;
         this._flushLearn();
         this._buffer = '';
         this._lastCommitTime = GLib.get_monotonic_time();
@@ -532,6 +658,13 @@ export class KeyboardUi {
         if (!this._suggestionBox.visible || !this._kb?.visible)
             return;
         const serial = ++this._suggestSerial;
+        // After a swipe, offer the other words the path could have meant.
+        if (this._swipeResult) {
+            this._suggestionBox.destroy_all_children();
+            for (const word of this._swipeResult.words.slice(1, 1 + MAX_SUGGESTIONS))
+                this._addSuggestionButton(word, word, false, () => this._replaceSwipe(word));
+            return;
+        }
         const context = this._context();
         const words = await this._daemon.suggest(context, '', MAX_SUGGESTIONS);
         if (this._destroyed || serial !== this._suggestSerial)
@@ -540,39 +673,93 @@ export class KeyboardUi {
         const partial = lastWord(context);
         words.forEach((word, i) => {
             const shown = matchCase(word, partial);
-            const button = new St.Button({
-                style_class: `nkb-suggestion${i === 0 && partial ? ' nkb-suggestion-best' : ''}`,
-                label: shown,
-                can_focus: false,
-                x_expand: true,
-            });
-            connectTap(button, {
-                onTap: () => this._applySuggestion(shown),
-                onLongPress: () => {
-                    this._daemon.forgetWord(word).catch(() => {});
-                    button.destroy();
-                },
-            });
-            this._suggestionBox.add_child(button);
+            this._addSuggestionButton(shown, word, i === 0 && !!partial, () => this._applySuggestion(shown));
         });
     }
 
+    _addSuggestionButton(label, word, best, onTap) {
+        const button = new St.Button({
+            style_class: `nkb-suggestion${best ? ' nkb-suggestion-best' : ''}`,
+            label,
+            can_focus: false,
+            x_expand: true,
+        });
+        connectTap(button, {
+            onTap,
+            onLongPress: () => {
+                this._daemon.forgetWord(word).catch(() => {});
+                button.destroy();
+            },
+        });
+        this._suggestionBox.add_child(button);
+    }
+
     _applySuggestion(word) {
-        const context = this._context();
-        const partial = lastWord(context);
-        const len = [...partial].length;
+        const partial = lastWord(this._context());
+        const text = word + (this._settings.get_boolean('auto-space') ? ' ' : '');
+        this._replaceBeforeCursor([...partial].length, text);
+    }
+
+    // Replace the len characters before the cursor with text.
+    _replaceBeforeCursor(len, text) {
+        // Backspaces go through the input thread and reach the app after a
+        // text-input commit sent right now would, so once we fall back to
+        // key events, type the text as key events too to keep the order.
+        const viaKeys = len > 0 && !this._surroundingFresh();
         if (len > 0) {
-            if (this._surroundingFresh()) {
-                Main.inputMethod.delete_surrounding(-len, len);
-            } else {
+            if (viaKeys) {
                 for (let i = 0; i < len; i++)
                     this._pressKey(Clutter.KEY_BackSpace);
+            } else {
+                Main.inputMethod.delete_surrounding(-len, len);
             }
             this._buffer = [...this._buffer].slice(0, -len).join('');
             this._pendingLearn = [...this._pendingLearn].slice(0, -Math.min(len, [...this._pendingLearn].length)).join('');
         }
+        if (!text) {
+            this._scheduleSuggest(SUGGEST_DELAY_MS);
+        } else if (viaKeys) {
+            for (const ch of text)
+                this._pressKey(Clutter.unicode_to_keysym(ch.codePointAt(0)));
+            this._onTextCommitted(text);
+        } else {
+            this._commitToApp(text);
+        }
+    }
+
+    // ---- swipe typing -----------------------------------------------------
+
+    async _onSwipe(keys, path, shifted) {
+        const context = this._context();
+        const words = await this._daemon.swipeWords(context, '',
+            JSON.stringify(keys), JSON.stringify(path), SWIPE_CHOICES);
+        console.log(`NextKeyBor swipe: ${path.length} points -> ${words.join(', ')}`);
+        if (this._destroyed || words.length === 0)
+            return;
+        const cased = shifted ? words.map(w => w.charAt(0).toUpperCase() + w.slice(1)) : words;
+        // Swiped words stand alone: add a space after a word typed just before.
+        const lead = context && !/[\s(\[{"'“‘/-]$/u.test(context) ? ' ' : '';
         const space = this._settings.get_boolean('auto-space') ? ' ' : '';
-        this._commitToApp(word + space);
+        const text = lead + cased[0] + space;
+        this._commitToApp(text);
+        this._swipeResult = {text, lead, space, words: cased};
+        if (shifted && !this._kb._latched)
+            this._kb._setActiveLevel('default');
+    }
+
+    _replaceSwipe(word) {
+        const r = this._swipeResult;
+        if (!r)
+            return;
+        const text = r.lead + word + r.space;
+        this._replaceBeforeCursor([...r.text].length, text);
+        this._swipeResult = {...r, text, words: [word, ...r.words.filter(w => w !== word)]};
+    }
+
+    _undoSwipe() {
+        const r = this._swipeResult;
+        this._swipeResult = null;
+        this._replaceBeforeCursor([...r.text].length - [...r.lead].length, '');
     }
 
     // ---- dictation --------------------------------------------------------

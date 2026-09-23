@@ -323,19 +323,6 @@ class MediaPanel extends Panel {
 
         const box = new St.BoxLayout({orientation: Clutter.Orientation.VERTICAL, x_expand: true});
         box.add_child(this.status);
-        this._hint = new St.BoxLayout({style_class: 'nkb-hint', visible: false, x_expand: true});
-        const hintLabel = new St.Label({
-            text: 'Online search needs a free API key (GIPHY, KLIPY or Tenor). Favourites and your own GIFs work without one.',
-            x_expand: true,
-            y_align: Clutter.ActorAlign.CENTER,
-        });
-        hintLabel.clutter_text.line_wrap = true;
-        this._hint.add_child(hintLabel);
-        this._hint.add_child(labelButton('Settings', {
-            styleClass: 'nkb-pill',
-            onTap: () => this._openPreferences(),
-        }));
-        box.add_child(this._hint);
         this._grid = flowBox('nkb-media-grid');
         box.add_child(this._grid);
         this.scrollView.child = box;
@@ -380,12 +367,9 @@ class MediaPanel extends Panel {
 
     _providerKey() {
         const provider = this._settings.get_string('gif-provider');
+        if (provider === 'openverse')
+            return provider;
         return `${provider}:${this._settings.get_string(`${provider}-api-key`)}`;
-    }
-
-    _hasApiKey() {
-        const provider = this._settings.get_string('gif-provider');
-        return this._settings.get_string(`${provider}-api-key`).length > 0;
     }
 
     _clear() {
@@ -399,17 +383,12 @@ class MediaPanel extends Panel {
     async refresh() {
         const serial = ++this._serial;
         this._addButton.visible = this.tab === 'mine';
-        this._hint.visible = false;
         this.showStatus('');
         this._requestId = null;
         this._loading = false;
 
         if (this.tab === 'online') {
             this._clear();
-            if (!this._hasApiKey()) {
-                this._hint.visible = true;
-                return;
-            }
             this._loadPage();
             return;
         }

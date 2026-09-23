@@ -49,6 +49,20 @@
       <default>true</default>
       <summary>Long-press top-row letters for digits and other keys for symbols</summary>
     </key>
+    <key name="swipe-typing" type="b">
+      <default>true</default>
+      <summary>Type words by sliding across the letters</summary>
+    </key>
+    <key name="height-landscape" type="i">
+      <range min="15" max="60"/>
+      <default>40</default>
+      <summary>Keyboard height in landscape, in percent of the screen height</summary>
+    </key>
+    <key name="height-portrait" type="i">
+      <range min="15" max="60"/>
+      <default>30</default>
+      <summary>Keyboard height in portrait, in percent of the screen height</summary>
+    </key>
     <key name="fix-auto-capitalization" type="b">
       <default>true</default>
       <summary>Stop the OSK latching Shift after backspace in apps that report no surrounding text</summary>
@@ -64,8 +78,9 @@
         <choice value='giphy'/>
         <choice value='tenor'/>
         <choice value='klipy'/>
+        <choice value='openverse'/>
       </choices>
-      <default>'giphy'</default>
+      <default>'openverse'</default>
       <summary>Online GIF and sticker search provider</summary>
     </key>
     <key name="giphy-api-key" type="s">

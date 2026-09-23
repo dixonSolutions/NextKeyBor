@@ -67,12 +67,12 @@ int main(int argc, char **argv) {
     nkb::media::init();
 
     svc.on("GetStatus", [](GVariant *, GDBusMethodInvocation *inv) {
-        std::string provider = nkb::setting_string("gif-provider", "giphy");
+        std::string provider = nkb::media::effective_provider();
         nkb::json status = {
             {"version", NKB_VERSION},
             {"speech", nkb::speech::status()},
             {"gif_provider", provider},
-            {"gif_provider_ready", !nkb::setting_string((provider + "-api-key").c_str(), "").empty()},
+            {"gif_provider_ready", true},
             {"suggest_language", nkb::predict::active_language()},
             {"keyboard", nkb::keyboard::state()},
         };

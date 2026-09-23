@@ -36,6 +36,8 @@ export default class NextKeyBorExtension extends Extension {
                 this._syncTapFix();
             else if (key === 'hold-for-numbers')
                 this._rebuildKeys();
+            else if (key === 'height-landscape' || key === 'height-portrait')
+                Main.keyboard._keyboard?._relayout();
         }, this);
         this._syncTapFix();
 
@@ -104,12 +106,21 @@ export default class NextKeyBorExtension extends Extension {
         };
 
         proto._relayout = function (...args) {
+            // The stock code clamps to the preferred height, which is the
+            // fixed height from the last relayout; drop it so our extra height
+            // isn't folded into the base and added again on every relayout.
+            this.height = -1;
+            const [minHeight] = this.get_preferred_height(-1);
             orig._relayout.apply(this, args);
-            this._nkbBaseHeight = this.height;
-            const extra = ext._uis?.get(this)?.extraHeight ?? 0;
             const monitor = Main.layoutManager.keyboardMonitor;
-            if (extra > 0 && monitor)
-                this.height = Math.min(this.height + extra, monitor.height * MAX_HEIGHT_RATIO);
+            if (!monitor)
+                return;
+            const maxHeight = monitor.height * MAX_HEIGHT_RATIO;
+            const key = monitor.width > monitor.height ? 'height-landscape' : 'height-portrait';
+            const base = Math.clamp(monitor.height * settings.get_int(key) / 100, minHeight, maxHeight);
+            const extra = ext._uis?.get(this)?.extraHeight ?? 0;
+            this._nkbBaseHeight = base;
+            this.height = Math.min(base + extra, maxHeight);
         };
 
         proto._addRowKeys = function (keys, layout, ...rest) {

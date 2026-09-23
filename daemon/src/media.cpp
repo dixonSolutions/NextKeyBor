@@ -274,6 +274,37 @@ json parse_klipy(const Query &q, const json &body) {
     return items;
 }
 
+// Openverse: openly licensed images, searchable without an account or key
+// (anonymous limit: 20 requests a minute, 200 a day). Mostly Wikimedia
+// animations rather than reaction GIFs.
+constexpr int kOpenversePageSize = 20;
+
+// Wikimedia Commons resizes animated GIFs, but only to its standard widths
+// and never beyond the original.
+std::string wikimedia_sized(const std::string &url, int original_width, int width) {
+    const std::string prefix = "https://upload.wikimedia.org/wikipedia/commons/";
+    if (url.compare(0, prefix.size(), prefix) != 0 || original_width <= width)
+        return url;
+    std::string name = url.substr(url.rfind('/') + 1);
+    return prefix + "thumb/" + url.substr(prefix.size()) + "/" + std::to_string(width) + "px-" + name;
+}
+
+json parse_openverse(const Query &q, const json &body) {
+    json items = json::array();
+    for (const auto &r : body.value("results", json::array())) {
+        std::string url = r.value("url", "");
+        if (url.empty())
+            continue;
+        // Openverse's own thumbnail links fail (HTTP 424); nearly all GIFs
+        // there come from Wikimedia, which serves smaller copies itself.
+        int width = r.contains("width") && r["width"].is_number() ? r["width"].get<int>() : 0;
+        items.push_back({{"id", "openverse:" + r.value("id", "")}, {"source", "openverse"}, {"kind", q.kind},
+                         {"title", r.value("title", "")}, {"preview_url", wikimedia_sized(url, width, 120)},
+                         {"url", wikimedia_sized(url, width, 330)}, {"preview", ""}});
+    }
+    return items;
+}
+
 json run_query(const Query &q, std::string &error, std::string &tenor_next) {
     std::string url;
     bool trending = trim(q.query).empty();
@@ -290,6 +321,13 @@ json run_query(const Query &q, std::string &error, std::string &tenor_next) {
               (q.kind == "sticker" ? "&searchfilter=sticker&media_filter=gif_transparent,tinygif_transparent,gif"
                                    : "&media_filter=gif,tinygif") +
               (q.tenor_pos.empty() ? "" : "&pos=" + url_escape(q.tenor_pos));
+    } else if (q.provider == "openverse") {
+        // No trending feed; show something lively for an empty query.
+        std::string terms = trending ? "funny animation" : q.query;
+        url = "https://api.openverse.org/v1/images/?q=" + url_escape(terms) + "&extension=gif" +
+              "&page_size=" + std::to_string(kOpenversePageSize) +
+              "&page=" + std::to_string(q.offset / kPageSize + 1) +
+              "&mature=" + (q.rating == "r" ? "true" : "false");
     } else {
         url = "https://api.klipy.com/api/v1/" + url_escape(q.key) + "/" +
               (q.kind == "sticker" ? "stickers" : "gifs") + (trending ? "/trending?" : "/search?q=" + esc + "&") +
@@ -308,6 +346,8 @@ json run_query(const Query &q, std::string &error, std::string &tenor_next) {
             else if (b.contains("errors") && b["errors"].is_object() && b["errors"].contains("message")) {
                 const json &m = b["errors"]["message"];
                 error += " (" + (m.is_array() && !m.empty() ? m[0].get<std::string>() : m.dump()) + ")";
+            } else if (b.contains("detail") && b["detail"].is_string()) {
+                error += " (" + b["detail"].get<std::string>() + ")";
             } else if (b.contains("message"))
                 error += " (" + b["message"].get<std::string>() + ")";
         } catch (...) {
@@ -320,6 +360,8 @@ json run_query(const Query &q, std::string &error, std::string &tenor_next) {
             return parse_giphy(q, body);
         if (q.provider == "tenor")
             return parse_tenor(q, body, tenor_next);
+        if (q.provider == "openverse")
+            return parse_openverse(q, body);
         return parse_klipy(q, body);
     } catch (const std::exception &e) {
         error = q.provider + ": unexpected response (" + e.what() + ")";
@@ -327,15 +369,28 @@ json run_query(const Query &q, std::string &error, std::string &tenor_next) {
     }
 }
 
+}  // namespace
+
+// The chosen provider, or Openverse (no key needed) until it has a key.
+std::string effective_provider() {
+    std::string provider = setting_string("gif-provider", "openverse");
+    if (provider != "openverse" && setting_string((provider + "-api-key").c_str(), "").empty())
+        return "openverse";
+    return provider;
+}
+
+namespace {
+
 std::string search(const std::string &kind_in, const std::string &query, unsigned offset) {
     std::string request_id = random_id();
     Query q;
-    q.provider = setting_string("gif-provider", "giphy");
+    q.provider = effective_provider();
     q.kind = kind_in == "sticker" ? "sticker" : "gif";
     q.query = query;
     q.offset = offset;
     q.rating = setting_string("gif-content-rating", "pg-13");
-    q.key = setting_string((q.provider + "-api-key").c_str(), "");
+    if (q.provider != "openverse")
+        q.key = setting_string((q.provider + "-api-key").c_str(), "");
     q.client = client_id();
     std::string pos_key = q.kind + "|" + query + "|" + std::to_string(offset);
     if (q.provider == "tenor" && offset > 0) {
@@ -349,7 +404,7 @@ std::string search(const std::string &kind_in, const std::string &query, unsigne
         }
         q.tenor_pos = it->second;
     }
-    if (q.key.empty()) {
+    if (q.key.empty() && q.provider != "openverse") {
         std::string msg = "No API key for " + q.provider + ". Add one in NextKeyBor settings (" + q.provider +
                           "-api-key).";
         run_on_main([request_id, msg] {

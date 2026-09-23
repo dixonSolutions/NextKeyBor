@@ -9,7 +9,7 @@ const BUS_NAME = 'io.github.nextkeybor.Daemon';
 const OBJECT_PATH = '/io/github/nextkeybor/Daemon';
 
 const MODELS = ['tiny', 'base', 'small', 'medium', 'large-v3-turbo', 'large-v3', 'tiny.en', 'base.en', 'small.en'];
-const PROVIDERS = [['giphy', 'GIPHY'], ['klipy', 'KLIPY'], ['tenor', 'Tenor']];
+const PROVIDERS = [['openverse', 'Openverse (no key)'], ['giphy', 'GIPHY'], ['klipy', 'KLIPY'], ['tenor', 'Tenor']];
 const RATINGS = [['g', 'G'], ['pg', 'PG'], ['pg-13', 'PG-13'], ['r', 'R']];
 
 function switchRow(settings, key, title, subtitle = '') {
@@ -94,7 +94,7 @@ export default class NextKeyBorPreferences extends ExtensionPreferences {
                 statusRow.subtitle = [
                     `Running · v${s.version ?? '?'}`,
                     `speech model ${speech.model ?? '?'}${speech.model_ready ? '' : ' (not downloaded)'}`,
-                    `GIFs: ${s.gif_provider ?? '?'}${s.gif_provider_ready ? '' : ' (no API key)'}`,
+                    `GIFs: ${s.gif_provider ?? '?'}`,
                 ].join(' · ');
                 const k = s.keyboard ?? {};
                 kbRow.subtitle = [
@@ -139,6 +139,12 @@ export default class NextKeyBorPreferences extends ExtensionPreferences {
         const holds = new Adw.PreferencesGroup({title: 'Keys'});
         holds.add(switchRow(settings, 'hold-for-numbers', 'Hold for numbers and symbols',
             'Long-press the top row for digits, other letters for symbols'));
+        holds.add(switchRow(settings, 'swipe-typing', 'Swipe typing',
+            'Slide across the letters to type a word; lift to finish'));
+        holds.add(spinRow(settings, 'height-landscape', 'Height in landscape', 15, 60,
+            'Percent of the screen; you can also drag the handle on top of the keyboard'));
+        holds.add(spinRow(settings, 'height-portrait', 'Height in portrait', 15, 60,
+            'Percent of the screen'));
         typing.add(holds);
 
         // --- Dictation
@@ -161,7 +167,7 @@ export default class NextKeyBorPreferences extends ExtensionPreferences {
         window.add(gifs);
         const prov = new Adw.PreferencesGroup({
             title: 'Online GIFs and stickers',
-            description: 'Get a free key at developers.giphy.com or partner.klipy.com. Favourites and your own GIFs work offline.',
+            description: 'Openverse works without a key but has few reaction GIFs. For GIPHY or KLIPY, get a free key at developers.giphy.com or partner.klipy.com; until a key is set, searches use Openverse. Favourites and your own GIFs work offline.',
         });
         prov.add(comboRow(settings, 'gif-provider', 'Provider', PROVIDERS));
         prov.add(entryRow(settings, 'giphy-api-key', 'GIPHY API key', true));

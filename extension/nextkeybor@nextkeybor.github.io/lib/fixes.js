@@ -55,8 +55,9 @@ export function updateLevelFromHints(userInputHappened) {
 }
 
 // The app sends text_input_v3.enable only after it has processed the tap, so
-// look for the focused text input a little later, then once more for slow apps.
-const CHECK_DELAYS_MS = [120, 450];
+// look for the focused text input a little later, then again for slow apps
+// and for Chromium, which drops and re-enables it while the tap settles.
+const CHECK_DELAYS_MS = [120, 450, 1000];
 
 const TOUCH_DEVICE_TYPES = [
     Clutter.InputDeviceType.TOUCHSCREEN_DEVICE,
@@ -97,6 +98,16 @@ function browserPopup(window) {
     return BROWSER_CLASS.test(classOf(window)) || BROWSER_CLASS.test(classOf(parent));
 }
 
+// Keyboard.open() normally waits a moment before showing, and a focus-out
+// in that window cancels it; Chromium blurs and refocuses its text input
+// around a tap, so show the keyboard straight away.
+function openNow() {
+    if (Main.keyboard.visible)
+        return;
+    Main.layoutManager.keyboardIndex = Main.layoutManager.focusIndex;
+    Main.keyboard.keyboardActor?.open(true);
+}
+
 // Mutter only raises the OSK for text-input-v3 version 1 clients when they
 // re-send enable on an already focused field, which GTK does on every tap but
 // Chromium, Electron and Qt never do. Open it ourselves after a touch/pen tap
@@ -127,17 +138,24 @@ export class TapFix {
         if (!TOUCH_DEVICE_TYPES.includes(deviceType))
             return Clutter.EVENT_PROPAGATE;
 
-        const windowActor = windowActorFor(global.stage.get_event_actor(event));
-        if (!windowActor)
+        const eventActor = global.stage.get_event_actor(event);
+        const windowActor = windowActorFor(eventActor);
+        const window = windowActor?.get_meta_window();
+        console.log(`NextKeyBor tap: actor ${eventActor}, window type ${window?.get_window_type()}, ` +
+            `class ${window?.get_wm_class()}, parent ${window?.get_transient_for()?.get_wm_class()}, ` +
+            `focus ${Main.inputMethod.currentFocus}, osk ${Main.keyboard.visible}`);
+        if (!window)
             return Clutter.EVENT_PROPAGATE;
-        const window = windowActor.get_meta_window();
         const popup = browserPopup(window);
 
         CHECK_DELAYS_MS.forEach((delay, i) => {
             const last = i === CHECK_DELAYS_MS.length - 1;
             const id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
                 this._timeouts.delete(id);
-                if (!this._maybeOpen() && popup && last)
+                const opened = this._maybeOpen();
+                if (last)
+                    console.log(`NextKeyBor tap check: focus ${Main.inputMethod.currentFocus}, popup ${popup}, osk ${Main.keyboard.visible}`);
+                if (!opened && popup && last)
                     this._openForPopup(window);
                 return GLib.SOURCE_REMOVE;
             });
@@ -152,16 +170,14 @@ export class TapFix {
         // enabled text input and cleared again on disable (blur).
         if (!Main.inputMethod.currentFocus)
             return false;
-        if (!Main.keyboard.visible)
-            Main.keyboard.open(Main.layoutManager.focusIndex);
+        openNow();
         return true;
     }
 
     _openForPopup(window) {
         console.log(`NextKeyBor: tap in browser popup (type ${window.get_window_type()}, ` +
             `class ${window.get_wm_class()}) with no text input focus; opening OSK`);
-        if (!Main.keyboard.visible)
-            Main.keyboard.open(Main.layoutManager.focusIndex);
+        openNow();
         if (this._popupWindow === window)
             return;
         this._forgetPopup();

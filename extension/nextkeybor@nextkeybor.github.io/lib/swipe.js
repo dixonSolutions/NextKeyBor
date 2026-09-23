@@ -1,0 +1,225 @@
+// Swipe (gesture) typing on the stock OSK: slide a finger across the letter
+// keys, a grey trail follows it, and on lift the path goes to the daemon to
+// be matched against the dictionary.
+//
+// Touches are watched from keyboardBox, an ancestor of the keyboard, so we
+// see them before the keys and before other extensions listening on the
+// keyboard itself (TouchUp's swipe-down-to-close reacts after 25px, well
+// before a swipe is recognised). Keys only act on begin/end, so swallowing
+// the moves of a touch that started on a letter costs them nothing.
+
+import Cairo from 'cairo';
+import Clutter from 'gi://Clutter';
+import St from 'gi://St';
+
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+
+// Finger travel, in key widths, before a press on a letter becomes a swipe.
+const START_DISTANCE = 0.45;
+const TRAIL_LIFETIME_MS = 280;
+const TRAIL_WIDTH = 6;
+const LETTER = /^\p{L}$/u;
+
+// The stock Key (a St.BoxLayout) around a letter key button, or null.
+function letterKeyOf(actor) {
+    const key = actor?.get_parent();
+    if (!key || key.keyButton !== actor || typeof key.cancel !== 'function')
+        return null;
+    return LETTER.test(actor.get_label() ?? '') ? key : null;
+}
+
+function allLetterButtons(root, out = []) {
+    for (const child of root.get_children()) {
+        if (!child.mapped)
+            continue;
+        if (child instanceof St.Button && letterKeyOf(child))
+            out.push(child);
+        else
+            allLetterButtons(child, out);
+    }
+    return out;
+}
+
+class Trail {
+    constructor() {
+        this._points = []; // [x, y, time] in stage coordinates
+        this._ended = false;
+        this._area = new St.DrawingArea({reactive: false});
+        this._area.set_size(global.stage.width, global.stage.height);
+        this._area.connect('repaint', area => this._repaint(area));
+        Main.layoutManager.uiGroup.add_child(this._area);
+
+        // Redraw every frame so the tail keeps fading while the finger rests.
+        this._timeline = new Clutter.Timeline({actor: this._area, duration: 1000, repeat_count: -1});
+        this._timeline.connect('new-frame', () => this._tick());
+        this._timeline.start();
+    }
+
+    add(x, y) {
+        this._points.push([x, y, Date.now()]);
+    }
+
+    // Let the rest of the tail fade out, then go away.
+    end() {
+        this._ended = true;
+    }
+
+    destroy() {
+        this._timeline?.stop();
+        this._timeline = null;
+        this._area?.destroy();
+        this._area = null;
+    }
+
+    _tick() {
+        const cutoff = Date.now() - TRAIL_LIFETIME_MS;
+        while (this._points.length > 1 && this._points[1][2] < cutoff)
+            this._points.shift();
+        if (this._ended && (this._points.length === 0 || this._points[this._points.length - 1][2] < cutoff)) {
+            this.destroy();
+            return;
+        }
+        this._area.queue_repaint();
+    }
+
+    _repaint(area) {
+        const cr = area.get_context();
+        const scale = St.ThemeContext.get_for_stage(global.stage).scale_factor;
+        const now = Date.now();
+        cr.setLineCap(Cairo.LineCap.ROUND);
+        cr.setLineJoin(Cairo.LineJoin.ROUND);
+        const pts = this._points;
+        for (let i = 1; i < pts.length; i++) {
+            const age = Math.min(1, (now - pts[i][2]) / TRAIL_LIFETIME_MS);
+            const fade = 1 - age;
+            if (fade <= 0)
+                continue;
+            cr.setSourceRGBA(0.75, 0.75, 0.78, 0.85 * fade);
+            cr.setLineWidth(TRAIL_WIDTH * scale * (0.35 + 0.65 * fade));
+            cr.moveTo(pts[i - 1][0], pts[i - 1][1]);
+            cr.lineTo(pts[i][0], pts[i][1]);
+            cr.stroke();
+        }
+        cr.$dispose();
+    }
+}
+
+export class SwipeTyper {
+    // onSwipe(keys, path, shifted) gets letter centres and the finger path in
+    // key-width units, and whether the keyboard showed capitals.
+    constructor(keyboard, {enabled, onSwipe}) {
+        this._kb = keyboard;
+        this._enabled = enabled;
+        this._onSwipe = onSwipe;
+        this._reset();
+        this._eventId = Main.layoutManager.keyboardBox.connect('captured-event',
+            (_a, event) => this._onEvent(event));
+    }
+
+    destroy() {
+        Main.layoutManager.keyboardBox.disconnect(this._eventId);
+        this._trail?.destroy();
+        this._reset();
+    }
+
+    _reset() {
+        this._slot = null;
+        this._key = null;
+        this._points = [];
+        this._swiping = false;
+        this._trail?.end();
+        this._trail = null;
+    }
+
+    _onEvent(event) {
+        const T = Clutter.EventType;
+        const type = event.type();
+        if (type !== T.TOUCH_BEGIN && type !== T.TOUCH_UPDATE &&
+            type !== T.TOUCH_END && type !== T.TOUCH_CANCEL)
+            return Clutter.EVENT_PROPAGATE;
+
+        // Compare slots: each event wraps its sequence in a new JS object.
+        const slot = event.get_event_sequence()?.get_slot() ?? -1;
+        const [x, y] = event.get_coords();
+
+        if (type === T.TOUCH_BEGIN) {
+            if (this._slot !== null || !this._enabled())
+                return Clutter.EVENT_PROPAGATE;
+            const key = letterKeyOf(global.stage.get_event_actor(event));
+            if (key && this._kb.contains(key)) {
+                this._slot = slot;
+                this._key = key;
+                this._points = [[x, y]];
+            }
+            return Clutter.EVENT_PROPAGATE;
+        }
+
+        if (this._slot === null || slot !== this._slot)
+            return Clutter.EVENT_PROPAGATE;
+
+        if (type === T.TOUCH_CANCEL) {
+            this._reset();
+            return Clutter.EVENT_PROPAGATE;
+        }
+
+        this._points.push([x, y]);
+        if (type === T.TOUCH_UPDATE) {
+            if (!this._swiping)
+                this._maybeStart(x, y);
+            else
+                this._trail?.add(x, y);
+            return Clutter.EVENT_STOP;
+        }
+
+        // TOUCH_END: a plain tap goes on to the key as usual.
+        if (!this._swiping) {
+            this._reset();
+            return Clutter.EVENT_PROPAGATE;
+        }
+        this._finish();
+        return Clutter.EVENT_STOP;
+    }
+
+    _maybeStart(x, y) {
+        const key = this._key;
+        // Long-press already opened the extra characters popup: leave it be.
+        if (key._pressTimeoutId === 0)
+            return;
+        const width = key.keyButton.get_transformed_size()[0];
+        const [x0, y0] = this._points[0];
+        if (!width || Math.hypot(x - x0, y - y0) < START_DISTANCE * width)
+            return;
+
+        this._swiping = true;
+        // Undo the press on the first key without typing it.
+        key.cancel();
+        key._pressed = false;
+        key.keyButton.remove_style_pseudo_class('active');
+        key.emit('released');
+
+        this._trail = new Trail();
+        for (const [px, py] of this._points)
+            this._trail.add(px, py);
+    }
+
+    _finish() {
+        const buttons = allLetterButtons(this._kb);
+        const shifted = this._kb._currentPage === this._kb._layers?.['shift'];
+        const points = this._points;
+        this._reset();
+        if (buttons.length === 0)
+            return;
+
+        // Normalise to key-width units so the daemon's radii mean "keys".
+        const widths = buttons.map(b => b.get_transformed_size()[0]).sort((a, b) => a - b);
+        const unit = widths[Math.floor(widths.length / 2)] || 1;
+        const keys = {};
+        for (const b of buttons) {
+            const [bx, by] = b.get_transformed_position();
+            const [bw, bh] = b.get_transformed_size();
+            keys[b.get_label().toLowerCase()] = [(bx + bw / 2) / unit, (by + bh / 2) / unit];
+        }
+        const path = points.map(([px, py]) => [px / unit, py / unit]);
+        this._onSwipe(keys, path, shifted);
+    }
+}

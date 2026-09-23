@@ -216,7 +216,8 @@ CURL *make_handle(const std::string &url) {
     CURL *c = curl_easy_init();
     curl_easy_setopt(c, CURLOPT_URL, url.c_str());
     curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(c, CURLOPT_USERAGENT, "NextKeyBor/" NKB_VERSION);
+    // Wikimedia asks clients for a descriptive agent with a contact URL.
+    curl_easy_setopt(c, CURLOPT_USERAGENT, "NextKeyBor/" NKB_VERSION " (https://github.com/dixonSolutions/NextKeyBor)");
     curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 15L);
     curl_easy_setopt(c, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(c, CURLOPT_ACCEPT_ENCODING, "");

@@ -7,9 +7,11 @@ NextKeyBor adds these to GNOME's built-in on-screen keyboard (OSK):
 - **🎤 Dictation:** speak and the text goes straight into the app. It runs locally with [whisper.cpp](https://github.com/ggml-org/whisper.cpp), and you can pick the language (or leave it on auto-detect).
 - **🌐 Languages:** switch the dictation language and your system keyboard layouts. It can also download spell-check dictionaries and language packs through PackageKit, the same system that GNOME Software uses.
 - **Autocomplete:** word completion, typo fixes and next-word prediction. It learns the words you type and keeps them only on your machine.
+- **Swipe typing:** slide across the letters and lift; a fading trail follows your finger. The best match is typed, the other matches wait in the suggestion bar, and backspace right after removes the whole word.
+- **Resizable:** drag the handle on top of the keyboard to set its height, separately for landscape and portrait.
 - **Hold for special characters:** long-press top-row letters for the digits 1–0. Other keys give common symbols, alongside GNOME's accented letters.
 - **Emoji and symbol search:** find emoji by name in your own language (using Unicode CLDR data) and search more than 1,100 symbols (arrows, currency, maths…).
-- **GIFs and stickers:** search trending and online results from GIPHY, Tenor or KLIPY. You can:
+- **GIFs and stickers:** search online results from GIPHY, Tenor or KLIPY with a free API key, or from Openverse with no key at all (openly licensed, mostly Wikimedia animations). You can:
   - favourite items (saved locally, so they work offline)
   - import your own GIFs through the system file picker
   - search your favourites and your own GIFs too.
@@ -38,7 +40,7 @@ sudo dnf install cmake ninja-build gcc-c++ glib2-devel libcurl-devel pipewire-ut
 
 Then log out and back in. Download a speech model from the 🌐 button on the keyboard. The `base` model is 142 MB and supports many languages.
 
-Online GIFs and stickers need a free API key: `gnome-extensions prefs nextkeybor@nextkeybor.github.io`.
+GIF search works straight away through Openverse. For GIPHY, KLIPY or Tenor results, add a free API key: `gnome-extensions prefs nextkeybor@nextkeybor.github.io`.
 
 To uninstall, run `./install.sh --uninstall`.
 

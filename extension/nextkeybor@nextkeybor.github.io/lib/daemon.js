@@ -128,6 +128,11 @@ export class DaemonClient extends Signals.EventEmitter {
         return words;
     }
 
+    async swipeWords(context, language, keys, path, max) {
+        const [words] = await this._call('SwipeWords', context, language, keys, path, max);
+        return words;
+    }
+
     learnText(text, language) {
         return this._call('LearnText', text, language);
     }
