@@ -14,8 +14,11 @@ import St from 'gi://St';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
-// Finger travel, in key widths, before a press on a letter becomes a swipe.
-const START_DISTANCE = 0.45;
+// A press on a letter becomes a swipe once the finger has travelled this far
+// (in key widths) and left the key by this margin, so fast taps that drift a
+// little stay taps.
+const START_DISTANCE = 0.75;
+const START_MARGIN = 0.2;
 const TRAIL_LIFETIME_MS = 280;
 const TRAIL_WIDTH = 6;
 const LETTER = /^\p{L}$/u;
@@ -185,9 +188,13 @@ export class SwipeTyper {
         // Long-press already opened the extra characters popup: leave it be.
         if (key._pressTimeoutId === 0)
             return;
-        const width = key.keyButton.get_transformed_size()[0];
+        const [kx, ky] = key.keyButton.get_transformed_position();
+        const [width, height] = key.keyButton.get_transformed_size();
         const [x0, y0] = this._points[0];
         if (!width || Math.hypot(x - x0, y - y0) < START_DISTANCE * width)
+            return;
+        const margin = START_MARGIN * width;
+        if (x > kx - margin && x < kx + width + margin && y > ky - margin && y < ky + height + margin)
             return;
 
         this._swiping = true;

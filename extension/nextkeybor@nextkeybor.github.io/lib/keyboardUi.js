@@ -103,6 +103,7 @@ export class KeyboardUi {
                 this._resetText();
                 this._syncVisibility();
             }, this);
+        keyboard.connectObject('notify::width', () => this._layoutPanel(), this);
         keyboard.connectObject('visibility-changed', () => {
             console.log(`NextKeyBor: keyboard visible ${keyboard.visible}, panel ${this._panel?.constructor.name ?? 'none'}`);
             if (!keyboard.visible) {
@@ -434,6 +435,11 @@ export class KeyboardUi {
         const panel = this._panel;
         if (!panel)
             return;
+        // Pin the width: otherwise the panel takes its content's natural
+        // width and the GIF grid never wraps (one row, thousands of px wide).
+        const padding = this._panelHost.get_stage()
+            ? this._panelHost.get_theme_node().get_horizontal_padding() : 0;
+        panel.width = Math.max(0, this._kb.width - padding);
         const base = this._kb._nkbBaseHeight || this._kb.height;
         if (panel.expanded) {
             this._kb._aspectContainer?.hide();
@@ -501,6 +507,8 @@ export class KeyboardUi {
                 return;
             }
             const wasEnabled = ctrl._deleteEnabled;
+            console.log(`NextKeyBor backspace: ${enabled} was ${wasEnabled}, swipe ${!!this._swipeResult}, ` +
+                `terminal ${this._isTerminal()}, surrounding ${!!Main.inputMethod.getSurroundingText()[0]}`);
             // Backspace right after a swipe removes the whole swiped word.
             if (enabled && !wasEnabled && this._swipeResult) {
                 ctrl._deleteEnabled = true;
