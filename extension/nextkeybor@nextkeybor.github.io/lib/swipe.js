@@ -20,6 +20,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 // little stay taps.
 const START_DISTANCE = 0.75;
 const START_MARGIN = 0.2;
+const GAP_REACH = 0.25;
 const TRAIL_LIFETIME_MS = 280;
 const TRAIL_WIDTH = 6;
 const LETTER = /^\p{L}$/u;
@@ -149,10 +150,14 @@ export class SwipeTyper {
         if (type === T.TOUCH_BEGIN) {
             if (this._slot !== null || !this._enabled())
                 return Clutter.EVENT_PROPAGATE;
-            const key = letterKeyOf(global.stage.get_event_actor(event));
+            // A finger often lands in the gap between keys: a swipe may
+            // start there too, from the nearest letter key.
+            const pressed = letterKeyOf(global.stage.get_event_actor(event));
+            const key = pressed ?? this._nearestLetterKey(x, y);
             if (key && this._kb.contains(key)) {
                 this._slot = slot;
                 this._key = key;
+                this._keyPressed = !!pressed;
                 this._points = [[x, y]];
             }
             return Clutter.EVENT_PROPAGATE;
@@ -191,7 +196,7 @@ export class SwipeTyper {
     _maybeStart(x, y) {
         const key = this._key;
         // Long-press already opened the extra characters popup: leave it be.
-        if (key._pressTimeoutId === 0)
+        if (this._keyPressed && key._pressTimeoutId === 0)
             return;
         const [kx, ky] = key.keyButton.get_transformed_position();
         const [width, height] = key.keyButton.get_transformed_size();
@@ -204,14 +209,34 @@ export class SwipeTyper {
 
         this._swiping = true;
         // Undo the press on the first key without typing it.
-        key.cancel();
-        key._pressed = false;
-        key.keyButton.remove_style_pseudo_class('active');
-        key.emit('released');
+        if (this._keyPressed) {
+            key.cancel();
+            key._pressed = false;
+            key.keyButton.remove_style_pseudo_class('active');
+            key.emit('released');
+        }
 
         this._trail = new Trail();
         for (const [px, py] of this._points)
             this._trail.add(px, py);
+    }
+
+    // The letter key within GAP_REACH key widths of (x, y), for touches that
+    // land between keys; null elsewhere (other keys, toolbar, panels).
+    _nearestLetterKey(x, y) {
+        let best = null, bestDistance = Infinity;
+        for (const button of allLetterButtons(this._kb)) {
+            const [bx, by] = button.get_transformed_position();
+            const [bw, bh] = button.get_transformed_size();
+            const dx = Math.max(bx - x, 0, x - (bx + bw));
+            const dy = Math.max(by - y, 0, y - (by + bh));
+            const distance = Math.hypot(dx, dy);
+            if (distance < bestDistance && distance <= GAP_REACH * bw) {
+                best = button;
+                bestDistance = distance;
+            }
+        }
+        return best?.get_parent() ?? null;
     }
 
     _finish() {

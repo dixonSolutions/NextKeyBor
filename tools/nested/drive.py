@@ -7,7 +7,7 @@ uses), so the test shell needs no unsafe mode.
     tools/nested/drive.py DIR 'tap 700 800; wait 0.3; swipe 100,800 300,800 500,850; shot out.png'
 
 Commands (coordinates are pixels on the 1440x960 test monitor):
-    tap X Y              touch down and up
+    tap X Y [DX DY]      touch down and up (optionally drifting by DX,DY before lifting)
     swipe X,Y X,Y ...    one finger through the points, ~60 ms per segment
     hold X Y SECONDS     touch and hold
     key KEYSYM [N]       press and release a key (X keysym, e.g. 0xff08 BackSpace) N times
@@ -68,9 +68,15 @@ class Driver:
         sig = {"NotifyTouchDown": "(sudd)", "NotifyTouchMotion": "(sudd)", "NotifyTouchUp": "(u)"}[method]
         self.rd.call_sync(method, GLib.Variant(sig, args), 0, 5000, None)
 
-    def tap(self, x, y):
+    def tap(self, x, y, dx=0.0, dy=0.0):
         self._touch("NotifyTouchDown", self.stream, 0, x, y)
-        self.wait(0.06)
+        self.wait(0.03)
+        if dx or dy:
+            for t in (0.5, 1.0):
+                self._touch("NotifyTouchMotion", self.stream, 0, x + dx * t, y + dy * t)
+                self.wait(0.015)
+        else:
+            self.wait(0.03)
         self._touch("NotifyTouchUp", 0)
         self.wait(0.12)
 
@@ -126,7 +132,7 @@ def main():
             continue
         op, args = words[0], words[1:]
         if op == "tap":
-            d.tap(float(args[0]), float(args[1]))
+            d.tap(*(float(a) for a in args[:4]))
         elif op == "hold":
             d.hold(float(args[0]), float(args[1]), float(args[2]))
         elif op == "swipe":
