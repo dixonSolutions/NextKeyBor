@@ -69,4 +69,6 @@ tools/nested/restart.sh /tmp/nkb                                   # session + a
 tools/nested/drive.py /tmp/nkb 'tap 700 450; wait 1; shot /tmp/k.png'
 ```
 
-With `mutter-devkit` installed (`sudo dnf install mutter-devkit`) the session also opens as a window you can use yourself.
+With `mutter-devkit` installed (`sudo dnf install mutter-devkit`) the session also opens as a window you can use yourself; without it, `tools/nested/view.py /tmp/nkb` shows it live (view only).
+
+More in `tools/nested/`: `swipe_test.py` swipes words and checks what gets typed; `NKB_EXTENSIONS="['nextkeybor@nextkeybor.github.io']" tools/nested/restart.sh` limits the session to chosen extensions.
