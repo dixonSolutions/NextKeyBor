@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist gettext-domain="nextkeybor">
+  <schema id="io.github.nextkeybor" path="/io/github/nextkeybor/">
+
+    <!-- Speech -->
+    <key name="speech-language" type="s">
+      <default>'auto'</default>
+      <summary>Dictation language (ISO-639-1 code or 'auto')</summary>
+    </key>
+    <key name="speech-recent-languages" type="as">
+      <default>['auto', 'en']</default>
+      <summary>Languages shown first in the dictation language menu</summary>
+    </key>
+    <key name="speech-model" type="s">
+      <default>'base'</default>
+      <summary>whisper.cpp model name (tiny, base, small, medium, large-v3-turbo, …)</summary>
+    </key>
+    <key name="speech-threads" type="i">
+      <default>0</default>
+      <summary>Transcription threads (0 = automatic)</summary>
+    </key>
+    <key name="speech-max-seconds" type="i">
+      <default>120</default>
+      <summary>Maximum dictation length in seconds</summary>
+    </key>
+    <key name="speech-silence-stop" type="b">
+      <default>true</default>
+      <summary>Stop dictation automatically after a pause</summary>
+    </key>
+
+    <!-- Typing -->
+    <key name="active-language" type="s">
+      <default>'en_US'</default>
+      <summary>Dictionary used for suggestions</summary>
+    </key>
+    <key name="suggestions-enabled" type="b">
+      <default>true</default>
+      <summary>Show word completion suggestions above the keys</summary>
+    </key>
+    <key name="auto-space" type="b">
+      <default>true</default>
+      <summary>Insert a space after picking a suggestion</summary>
+    </key>
+    <key name="learn-words" type="b">
+      <default>true</default>
+      <summary>Learn words you type (stored locally only)</summary>
+    </key>
+    <key name="hold-for-numbers" type="b">
+      <default>true</default>
+      <summary>Long-press top-row letters for digits and other keys for symbols</summary>
+    </key>
+    <key name="fix-auto-capitalization" type="b">
+      <default>true</default>
+      <summary>Stop the OSK latching Shift after backspace in apps that report no surrounding text</summary>
+    </key>
+    <key name="chromium-tap-fix" type="b">
+      <default>true</default>
+      <summary>Open the OSK when tapping text fields in Chromium, Electron and Qt apps</summary>
+    </key>
+
+    <!-- GIFs / stickers -->
+    <key name="gif-provider" type="s">
+      <choices>
+        <choice value='giphy'/>
+        <choice value='tenor'/>
+        <choice value='klipy'/>
+      </choices>
+      <default>'giphy'</default>
+      <summary>Online GIF and sticker search provider</summary>
+    </key>
+    <key name="giphy-api-key" type="s">
+      <default>''</default>
+      <summary>GIPHY API key (free at developers.giphy.com)</summary>
+    </key>
+    <key name="tenor-api-key" type="s">
+      <default>''</default>
+      <summary>Tenor API key (Google Cloud)</summary>
+    </key>
+    <key name="klipy-api-key" type="s">
+      <default>''</default>
+      <summary>KLIPY API key (free at partner.klipy.com)</summary>
+    </key>
+    <key name="gif-content-rating" type="s">
+      <choices>
+        <choice value='g'/>
+        <choice value='pg'/>
+        <choice value='pg-13'/>
+        <choice value='r'/>
+      </choices>
+      <default>'pg-13'</default>
+      <summary>Maximum content rating for online results</summary>
+    </key>
+    <key name="gif-cache-mb" type="i">
+      <default>300</default>
+      <summary>Size limit for the GIF thumbnail/download cache</summary>
+    </key>
+
+    <!-- Physical keyboard detection -->
+    <key name="auto-toggle-osk" type="b">
+      <default>true</default>
+      <summary>Enable the OSK only when no physical keyboard is usable</summary>
+    </key>
+    <key name="hide-osk-on-typing" type="b">
+      <default>true</default>
+      <summary>Turn the OSK off when typing on a physical keyboard</summary>
+    </key>
+    <key name="notify-keyboard-changes" type="b">
+      <default>true</default>
+      <summary>Show a notification when the OSK is switched on or off</summary>
+    </key>
+    <key name="ignored-keyboards" type="as">
+      <default>['keyd virtual', 'ydotool', 'virtual keyboard', 'uinput']</default>
+      <summary>Name fragments of input devices that are not real keyboards</summary>
+    </key>
+  </schema>
+</schemalist>

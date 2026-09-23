@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=io.github.nextkeybor.Daemon
+Exec=@BINDIR@/nextkeybord
+SystemdService=nextkeybord.service

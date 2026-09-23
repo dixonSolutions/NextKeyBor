@@ -1,0 +1,139 @@
+/* NextKeyBor — follows the stock #keyboard colours (see gnome-shell-dark.css). */
+
+.nkb-toolbar {
+  padding: 6px 8px 0 8px;
+  spacing: 4px;
+  min-height: 44px;
+}
+
+.nkb-tool-button {
+  min-width: 40px;
+  min-height: 40px;
+  padding: 0 10px;
+  border-radius: 12px;
+  color: #ffffff;
+  background-color: transparent;
+  font-weight: bold;
+}
+.nkb-tool-button StIcon { icon-size: 20px; }
+.nkb-tool-button:hover { background-color: rgba(255, 255, 255, 0.08); }
+.nkb-tool-button:active,
+.nkb-tool-button:checked {
+  background-color: st-mix(-st-accent-color, #2e2e33, 60%);
+}
+.nkb-flat { min-width: 36px; min-height: 36px; padding: 0 6px; }
+
+.nkb-gif-button { font-size: 0.9em; letter-spacing: 1px; }
+
+.nkb-mic-box { spacing: 4px; }
+.nkb-mic-label { font-size: 0.75em; font-weight: bold; }
+.nkb-mic.nkb-recording {
+  background-color: #c01c28;
+  color: #ffffff;
+}
+.nkb-mic.nkb-transcribing {
+  background-color: st-mix(-st-accent-color, #2e2e33, 50%);
+}
+
+.nkb-center { padding: 0 6px; }
+.nkb-suggestions { spacing: 4px; }
+.nkb-suggestion {
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: 10px;
+  color: #ffffff;
+  font-size: 1.1em;
+  background-color: transparent;
+}
+.nkb-suggestion:hover { background-color: rgba(255, 255, 255, 0.08); }
+.nkb-suggestion:active { background-color: rgba(255, 255, 255, 0.18); }
+.nkb-suggestion-best { font-weight: bold; }
+.nkb-toolbar-status { color: rgba(255, 255, 255, 0.8); font-size: 0.95em; }
+
+/* Panels */
+.nkb-panel-host { padding: 4px 8px; }
+.nkb-panel { spacing: 6px; }
+.nkb-panel-header { spacing: 4px; }
+.nkb-tab { min-width: 44px; padding: 0 12px; }
+
+.nkb-query {
+  spacing: 6px;
+  padding: 0 6px 0 12px;
+  min-height: 40px;
+  border-radius: 20px;
+  background-color: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+}
+.nkb-query-icon { icon-size: 16px; color: rgba(255, 255, 255, 0.7); }
+.nkb-query-label { font-size: 1.05em; }
+.nkb-query-label.nkb-placeholder { color: rgba(255, 255, 255, 0.5); }
+
+.nkb-panel-scroll { border-radius: 12px; }
+.nkb-status {
+  padding: 8px 12px;
+  color: rgba(255, 255, 255, 0.8);
+}
+.nkb-hint {
+  spacing: 12px;
+  padding: 12px;
+  margin: 4px 0;
+  border-radius: 12px;
+  background-color: rgba(255, 255, 255, 0.06);
+  color: #ffffff;
+}
+.nkb-pill {
+  min-height: 34px;
+  padding: 0 16px;
+  border-radius: 17px;
+  background-color: -st-accent-color;
+  color: -st-accent-fg-color;
+}
+
+/* Emoji / symbols */
+.nkb-emoji-grid { padding: 4px; }
+.nkb-emoji {
+  min-width: 52px;
+  min-height: 52px;
+  font-size: 1.9em;
+  border-radius: 10px;
+  color: #ffffff;
+  background-color: transparent;
+}
+.nkb-emoji:active { background-color: rgba(255, 255, 255, 0.18); }
+.nkb-symbol { font-size: 1.6em; background-color: rgba(255, 255, 255, 0.05); }
+
+/* GIFs / stickers */
+.nkb-media-grid { padding: 2px; }
+.nkb-media-cell {
+  border-radius: 10px;
+  background-color: rgba(255, 255, 255, 0.05);
+}
+.nkb-media-cell:active { background-color: rgba(255, 255, 255, 0.2); }
+.nkb-media-image { border-radius: 10px; }
+.nkb-fav-badge {
+  icon-size: 16px;
+  color: #f6d32d;
+  margin: 4px;
+}
+
+/* Language list */
+.nkb-list { spacing: 2px; }
+.nkb-list-header {
+  padding: 10px 12px 4px 12px;
+  font-weight: bold;
+  font-size: 0.85em;
+  color: rgba(255, 255, 255, 0.6);
+}
+.nkb-row {
+  spacing: 12px;
+  padding: 8px 12px;
+  min-height: 40px;
+  border-radius: 10px;
+  color: #ffffff;
+}
+.nkb-row:active { background-color: rgba(255, 255, 255, 0.12); }
+.nkb-row:checked { background-color: st-mix(-st-accent-color, #2e2e33, 35%); }
+.nkb-row-title { font-weight: bold; }
+.nkb-row-subtitle { font-size: 0.85em; color: rgba(255, 255, 255, 0.65); }
+.nkb-row-icon { icon-size: 16px; }
+.nkb-row-progress { font-size: 0.85em; color: rgba(255, 255, 255, 0.75); }

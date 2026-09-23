@@ -1,0 +1,209 @@
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<!--
+  NextKeyBor daemon interface.
+  Bus name: io.github.nextkeybor.Daemon   Object: /io/github/nextkeybor/Daemon
+
+  All JSON strings are UTF-8 JSON documents; shapes are documented per method.
+  Media item JSON (GIFs, stickers, own uploads):
+    {"id": "giphy:abc", "source": "giphy|tenor|klipy|local", "kind": "gif|sticker",
+     "title": "...", "preview": "/abs/path/to/cached/thumb.gif" or "",
+     "preview_url": "https://...", "url": "https://... full gif", "favorite": true}
+  "preview" is filled once the thumbnail is in the local cache; if it is empty,
+  listen for MediaPreviewReady(id, path).
+-->
+<node>
+  <interface name="io.github.nextkeybor.Daemon">
+
+    <!-- ===== General ===== -->
+    <method name="GetStatus">
+      <!-- {"version": "0.1.0", "speech": {"model": "base", "model_ready": bool,
+             "recording": bool, "language": "auto"},
+            "gif_provider": "giphy", "gif_provider_ready": bool,
+            "keyboard": {"physical": ["Name", ...], "tablet_mode": bool, "osk_enabled": bool,
+                         "auto_toggle": bool}} -->
+      <arg direction="out" type="s" name="status_json"/>
+    </method>
+
+    <!-- ===== Speech to text (whisper.cpp) ===== -->
+    <method name="StartDictation">
+      <!-- language: "auto" or an ISO-639-1 code such as "en", "pl"; "" = use setting -->
+      <arg direction="in" type="s" name="language"/>
+      <arg direction="out" type="s" name="session_id"/>
+    </method>
+    <method name="StopDictation">
+      <!-- Stops recording and starts transcription; result arrives in DictationResult. -->
+      <arg direction="in" type="s" name="session_id"/>
+    </method>
+    <method name="CancelDictation">
+      <arg direction="in" type="s" name="session_id"/>
+    </method>
+    <method name="ListSpeechLanguages">
+      <!-- [{"code": "en", "name": "English"}, ...] (whisper languages, "auto" first) -->
+      <arg direction="out" type="s" name="languages_json"/>
+    </method>
+    <method name="ListSpeechModels">
+      <!-- [{"name": "base", "size_mb": 142, "installed": bool, "multilingual": bool, "active": bool}] -->
+      <arg direction="out" type="s" name="models_json"/>
+    </method>
+    <method name="DownloadSpeechModel">
+      <!-- Progress via DownloadProgress("model:<name>", fraction) and DownloadFinished. -->
+      <arg direction="in" type="s" name="name"/>
+    </method>
+    <signal name="DictationState">
+      <!-- state: "recording" | "transcribing" | "idle" -->
+      <arg type="s" name="session_id"/>
+      <arg type="s" name="state"/>
+    </signal>
+    <signal name="DictationLevel">
+      <!-- Microphone level 0..1, ~10 Hz while recording (for a VU animation). -->
+      <arg type="d" name="level"/>
+    </signal>
+    <signal name="DictationResult">
+      <arg type="s" name="session_id"/>
+      <arg type="s" name="text"/>
+      <arg type="s" name="detected_language"/>
+    </signal>
+    <signal name="DictationError">
+      <arg type="s" name="session_id"/>
+      <arg type="s" name="message"/>
+    </signal>
+
+    <!-- ===== Word completion / prediction ===== -->
+    <method name="Suggest">
+      <!-- context: text before the cursor (as much as known); language: "en_US" etc, "" = current.
+           Returns up to max suggestions: ["word", ...]. If context ends with a space this is
+           next-word prediction, otherwise completion/correction of the last partial word. -->
+      <arg direction="in" type="s" name="context"/>
+      <arg direction="in" type="s" name="language"/>
+      <arg direction="in" type="u" name="max"/>
+      <arg direction="out" type="as" name="suggestions"/>
+    </method>
+    <method name="LearnText">
+      <!-- Feed committed text (words, bigrams) into the user's personal dictionary. -->
+      <arg direction="in" type="s" name="text"/>
+      <arg direction="in" type="s" name="language"/>
+    </method>
+    <method name="ForgetWord">
+      <arg direction="in" type="s" name="word"/>
+    </method>
+
+    <!-- ===== Languages (system integration) ===== -->
+    <method name="ListLanguages">
+      <!-- [{"code": "pl_PL", "name": "Polish", "dictionary": bool (hunspell installed),
+             "layout": "pl" or "", "layout_enabled": bool, "package": "hunspell-pl"}] -->
+      <arg direction="out" type="s" name="languages_json"/>
+    </method>
+    <method name="InstallLanguage">
+      <!-- Installs spell dictionary + langpack through PackageKit (asks for authorization via
+           polkit), and adds the keyboard layout to org.gnome.desktop.input-sources.
+           Progress via DownloadProgress("lang:<code>", fraction) and DownloadFinished. -->
+      <arg direction="in" type="s" name="code"/>
+    </method>
+    <method name="SetActiveLanguage">
+      <!-- Language used by Suggest/LearnText when "" is passed. -->
+      <arg direction="in" type="s" name="code"/>
+    </method>
+
+    <!-- ===== Emoji search (CLDR annotations, localized) ===== -->
+    <method name="SearchEmoji">
+      <!-- query "" returns recently used then popular. [{"emoji": "😀", "name": "grinning face"}] -->
+      <arg direction="in" type="s" name="query"/>
+      <arg direction="in" type="u" name="max"/>
+      <arg direction="out" type="s" name="results_json"/>
+    </method>
+    <method name="NoteEmojiUsed">
+      <arg direction="in" type="s" name="emoji"/>
+    </method>
+
+    <!-- ===== Symbol search (hold / special characters) ===== -->
+    <method name="SearchSymbols">
+      <!-- e.g. "arrow", "euro", "degree" -> [{"symbol": "→", "name": "rightwards arrow"}] -->
+      <arg direction="in" type="s" name="query"/>
+      <arg direction="in" type="u" name="max"/>
+      <arg direction="out" type="s" name="results_json"/>
+    </method>
+
+    <!-- ===== GIFs and stickers ===== -->
+    <method name="SearchMedia">
+      <!-- kind: "gif" | "sticker"; query "" = trending. offset for paging.
+           Returns request_id immediately; results come in MediaResults(request_id, items_json). -->
+      <arg direction="in" type="s" name="kind"/>
+      <arg direction="in" type="s" name="query"/>
+      <arg direction="in" type="u" name="offset"/>
+      <arg direction="out" type="s" name="request_id"/>
+    </method>
+    <method name="ListFavorites">
+      <!-- kind "" = all. Optional query filters by title/tags. Returns items JSON array. -->
+      <arg direction="in" type="s" name="kind"/>
+      <arg direction="in" type="s" name="query"/>
+      <arg direction="out" type="s" name="items_json"/>
+    </method>
+    <method name="ListOwnMedia">
+      <!-- User-imported GIFs/stickers; optional query filters by file name/tags. -->
+      <arg direction="in" type="s" name="query"/>
+      <arg direction="out" type="s" name="items_json"/>
+    </method>
+    <method name="SetFavorite">
+      <arg direction="in" type="s" name="item_json"/>
+      <arg direction="in" type="b" name="favorite"/>
+    </method>
+    <method name="ImportOwnMedia">
+      <!-- Opens the xdg-desktop-portal file chooser (multiple files) when paths is empty,
+           otherwise copies the given files into the library. tags applies to all.
+           Emits OwnMediaChanged when done. -->
+      <arg direction="in" type="as" name="paths"/>
+      <arg direction="in" type="s" name="tags"/>
+    </method>
+    <method name="RemoveOwnMedia">
+      <arg direction="in" type="s" name="id"/>
+    </method>
+    <method name="PrepareMedia">
+      <!-- Downloads the full-size file (if remote) and returns its local path + mime type.
+           The shell extension then puts it on the clipboard and pastes. Returns
+           ("", "") if it is not cached yet; the file arrives via MediaReady(id, path, mime). -->
+      <arg direction="in" type="s" name="item_json"/>
+      <arg direction="out" type="s" name="path"/>
+      <arg direction="out" type="s" name="mime"/>
+    </method>
+    <signal name="MediaResults">
+      <arg type="s" name="request_id"/>
+      <arg type="s" name="items_json"/>
+    </signal>
+    <signal name="MediaPreviewReady">
+      <arg type="s" name="id"/>
+      <arg type="s" name="path"/>
+    </signal>
+    <signal name="MediaReady">
+      <arg type="s" name="id"/>
+      <arg type="s" name="path"/>
+      <arg type="s" name="mime"/>
+    </signal>
+    <signal name="MediaError">
+      <arg type="s" name="request_id"/>
+      <arg type="s" name="message"/>
+    </signal>
+    <signal name="OwnMediaChanged"/>
+    <signal name="FavoritesChanged"/>
+
+    <!-- ===== Physical keyboard detection (system-wide, evdev) ===== -->
+    <method name="GetKeyboardState">
+      <!-- same shape as GetStatus().keyboard -->
+      <arg direction="out" type="s" name="state_json"/>
+    </method>
+    <signal name="KeyboardStateChanged">
+      <arg type="s" name="state_json"/>
+    </signal>
+
+    <!-- ===== Settings / downloads ===== -->
+    <signal name="DownloadProgress">
+      <arg type="s" name="what"/>
+      <arg type="d" name="fraction"/>
+    </signal>
+    <signal name="DownloadFinished">
+      <arg type="s" name="what"/>
+      <arg type="b" name="success"/>
+      <arg type="s" name="message"/>
+    </signal>
+  </interface>
+</node>
