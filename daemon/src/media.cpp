@@ -326,7 +326,7 @@ json run_query(const Query &q, std::string &error, std::string &tenor_next) {
         std::string terms = trending ? "funny animation" : q.query;
         url = "https://api.openverse.org/v1/images/?q=" + url_escape(terms) + "&extension=gif" +
               "&page_size=" + std::to_string(kOpenversePageSize) +
-              "&page=" + std::to_string(q.offset / kPageSize + 1) +
+              "&page=" + std::to_string(q.offset / kOpenversePageSize + 1) +
               "&mature=" + (q.rating == "r" ? "true" : "false");
     } else {
         url = "https://api.klipy.com/api/v1/" + url_escape(q.key) + "/" +
