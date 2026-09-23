@@ -53,6 +53,27 @@
       <default>true</default>
       <summary>Type words by sliding across the letters</summary>
     </key>
+    <key name="floating" type="b">
+      <default>false</default>
+      <summary>Show the keyboard as a floating panel you can drag, instead of docked at the bottom</summary>
+    </key>
+    <key name="float-width" type="i">
+      <range min="30" max="100"/>
+      <default>60</default>
+      <summary>Floating keyboard width, in percent of the screen width</summary>
+    </key>
+    <key name="float-x" type="d">
+      <default>-1</default>
+      <summary>Floating keyboard left edge, as a fraction of the screen width (-1: centred)</summary>
+    </key>
+    <key name="float-y" type="d">
+      <default>-1</default>
+      <summary>Floating keyboard top edge, as a fraction of the screen height (-1: near the bottom)</summary>
+    </key>
+    <key name="show-indicator" type="b">
+      <default>true</default>
+      <summary>Show a keyboard button in the top bar</summary>
+    </key>
     <key name="height-landscape" type="i">
       <range min="15" max="60"/>
       <default>40</default>

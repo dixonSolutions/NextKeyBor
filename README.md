@@ -9,6 +9,8 @@ NextKeyBor adds these to GNOME's built-in on-screen keyboard (OSK):
 - **Autocomplete:** word completion, typo fixes and next-word prediction. It learns the words you type and keeps them only on your machine.
 - **Swipe typing:** slide across the letters and lift; a fading trail follows your finger. The best match is typed, the other matches wait in the suggestion bar, and backspace right after removes the whole word.
 - **Resizable:** drag the handle on top of the keyboard to set its height, separately for landscape and portrait.
+- **Floating keyboard:** switch it on from the keyboard button in the top bar (hold it for the menu) or in settings. The keyboard becomes a panel you drag by its top bar; it opens where you left it, whether you tap a text field or the top bar button, and its X closes it.
+- **Screenshots:** the camera button opens GNOME's screenshot tool (area, window or screen; picture or video).
 - **Hold for special characters:** long-press top-row letters for the digits 1–0. Other keys give common symbols, alongside GNOME's accented letters.
 - **Emoji and symbol search:** find emoji by name in your own language (using Unicode CLDR data) and search more than 1,100 symbols (arrows, currency, maths…).
 - **GIFs and stickers:** search online results from GIPHY, Tenor or KLIPY with a free API key, or from Openverse with no key at all (openly licensed, mostly Wikimedia animations). You can:

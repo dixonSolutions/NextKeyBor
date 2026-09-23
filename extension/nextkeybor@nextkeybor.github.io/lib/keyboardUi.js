@@ -62,11 +62,12 @@ function loadBytes(path) {
 }
 
 export class KeyboardUi {
-    constructor(keyboard, {settings, daemon, openPreferences}) {
+    constructor(keyboard, {settings, daemon, openPreferences, floating = null}) {
         this._kb = keyboard;
         this._settings = settings;
         this._daemon = daemon;
         this._openPreferences = openPreferences;
+        this._floating = floating;
 
         this._panel = null;
         this._buffer = '';
@@ -112,6 +113,10 @@ export class KeyboardUi {
                 this._resetText();
                 this._syncVisibility();
             }, this);
+        // The input region follows allocations, not the slide-in translation;
+        // refresh it so a floating keyboard's top edge takes touches too.
+        keyboard.connectObject('notify::translation-y',
+            () => Main.layoutManager._queueUpdateRegions(), this);
         // Not notify::width: relayouts emit it too, and _layoutPanel relayouts.
         Main.layoutManager.connectObject('monitors-changed', () => this._layoutPanel(), this);
         keyboard.connectObject('visibility-changed', () => {
@@ -135,7 +140,7 @@ export class KeyboardUi {
         settings.connectObject('changed', (_s, key) => {
             if (key === 'speech-language')
                 this._syncMicLabel();
-            if (key === 'gif-provider' || key.endsWith('-api-key'))
+            if (key === 'gif-provider' || key.endsWith('-api-key') || key === 'floating')
                 this._syncVisibility();
             if (key === 'suggestions-enabled') {
                 this._syncVisibility();
@@ -229,25 +234,38 @@ export class KeyboardUi {
         const T = Clutter.EventType;
         const type = event.type();
         if (type === T.BUTTON_PRESS || type === T.TOUCH_BEGIN) {
-            if (!this._resizeGrab) {
+            if (!this._dragging) {
+                this._dragging = true;
                 this._resizeSlot = event.get_event_sequence()?.get_slot() ?? -1;
-                this._resizeGrab = global.stage.grab(this._resizeStrip);
+                // Floating: the strip moves the keyboard instead of sizing it.
+                this._moveStart = this._floating?.enabled
+                    ? [...event.get_coords(), ...this._floating.position()] : null;
+                // A finger's touches already stay with this strip. Grab only
+                // for the mouse: a stage grab takes keyboard focus from the
+                // app, and the keyboard closes with it.
+                if (type === T.BUTTON_PRESS)
+                    this._resizeGrab = global.stage.grab(this._resizeStrip);
                 this._resizeStrip.add_style_pseudo_class('active');
             }
             return Clutter.EVENT_STOP;
         }
-        if (!this._resizeGrab)
+        if (!this._dragging)
             return Clutter.EVENT_PROPAGATE;
         if ((type === T.TOUCH_UPDATE || type === T.TOUCH_END || type === T.TOUCH_CANCEL) &&
             (event.get_event_sequence()?.get_slot() ?? -1) !== this._resizeSlot)
             return Clutter.EVENT_STOP;
-        if (type === T.MOTION || type === T.TOUCH_UPDATE) {
-            this._resizeTo(event.get_coords()[1]);
-        } else if (type === T.BUTTON_RELEASE || type === T.TOUCH_END || type === T.TOUCH_CANCEL) {
-            if (type !== T.TOUCH_CANCEL)
-                this._resizeTo(event.get_coords()[1]);
-            this._endResize();
+        const done = type === T.BUTTON_RELEASE || type === T.TOUCH_END || type === T.TOUCH_CANCEL;
+        if (type === T.MOTION || type === T.TOUCH_UPDATE || done) {
+            const [x, y] = event.get_coords();
+            if (this._moveStart) {
+                const [x0, y0, left, top] = this._moveStart;
+                this._floating.moveTo(left + x - x0, top + y - y0, done);
+            } else if (type !== T.TOUCH_CANCEL) {
+                this._resizeTo(y);
+            }
         }
+        if (done)
+            this._endResize();
         return Clutter.EVENT_STOP;
     }
 
@@ -264,6 +282,7 @@ export class KeyboardUi {
     }
 
     _endResize() {
+        this._dragging = false;
         this._resizeGrab?.dismiss();
         this._resizeGrab = null;
         this._resizeSlot = null;
@@ -338,7 +357,12 @@ export class KeyboardUi {
             accessibleName: 'NextKeyBor settings',
             onTap: () => this._openPreferences(),
         });
-        for (const b of [this._screenshotButton, this._gifButton, this._stickerButton, this._settingsButton])
+        // Floating only: docked, the keyboard's own hide key does this.
+        this._closeButton = iconButton('window-close-symbolic', {
+            accessibleName: 'Close keyboard',
+            onTap: () => this._kb.close(true),
+        });
+        for (const b of [this._screenshotButton, this._gifButton, this._stickerButton, this._settingsButton, this._closeButton])
             this._toolbar.add_child(b);
 
         kb.insert_child_at_index(this._toolbar, 0);
@@ -364,6 +388,7 @@ export class KeyboardUi {
             b.opacity = available ? 255 : 100;
         }
         this._micButton.visible = !password;
+        this._closeButton.visible = !!this._floating?.enabled;
         // Openverse (used until a GIPHY/KLIPY/Tenor key is set) has no stickers.
         const provider = this._settings.get_string('gif-provider');
         this._stickerButton.visible = provider !== 'openverse' &&

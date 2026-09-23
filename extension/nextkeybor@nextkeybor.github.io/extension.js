@@ -5,6 +5,7 @@ import {Keyboard} from 'resource:///org/gnome/shell/ui/keyboard.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 import {DaemonClient} from './lib/daemon.js';
+import {Floating, KeyboardIndicator} from './lib/floating.js';
 import {TapFix, updateLevelFromHints} from './lib/fixes.js';
 import {augmentRow, centreSpaceBar} from './lib/holds.js';
 import {KeyboardUi, MAX_HEIGHT_RATIO} from './lib/keyboardUi.js';
@@ -27,7 +28,9 @@ export default class NextKeyBorExtension extends Extension {
             }
         }
 
+        this._floating = new Floating(this._settings);
         this._patchKeyboard();
+        this._syncIndicator();
 
         this._settings.connectObject('changed', (_s, key) => {
             if (key === 'chromium-tap-fix')
@@ -36,6 +39,8 @@ export default class NextKeyBorExtension extends Extension {
                 this._rebuildKeys();
             else if (key === 'height-landscape' || key === 'height-portrait')
                 Main.keyboard._keyboard?._relayout();
+            else if (key === 'show-indicator')
+                this._syncIndicator();
         }, this);
         this._syncTapFix();
 
@@ -58,7 +63,11 @@ export default class NextKeyBorExtension extends Extension {
         }
         this._uis.clear();
 
+        this._indicator?.destroy();
+        this._indicator = null;
         this._unpatchKeyboard();
+        this._floating.destroy();
+        this._floating = null;
         this._rebuildKeys();
         Main.keyboard._keyboard?._relayout();
 
@@ -66,6 +75,19 @@ export default class NextKeyBorExtension extends Extension {
         this._daemon = null;
         this._settings = null;
         this._uis = null;
+    }
+
+    _syncIndicator() {
+        const want = this._settings.get_boolean('show-indicator');
+        if (want && !this._indicator) {
+            this._indicator = new KeyboardIndicator(this._settings, {
+                openPreferences: () => this.openPreferences(),
+            });
+            Main.panel.addToStatusArea(this.uuid, this._indicator);
+        } else if (!want && this._indicator) {
+            this._indicator.destroy();
+            this._indicator = null;
+        }
     }
 
     _syncTapFix() {
@@ -96,6 +118,7 @@ export default class NextKeyBorExtension extends Extension {
             _addRowKeys: proto._addRowKeys,
             _updateLevelFromHints: proto._updateLevelFromHints,
             _toggleEmoji: proto._toggleEmoji,
+            setCursorLocation: proto.setCursorLocation,
         };
         const orig = this._orig;
 
@@ -114,12 +137,26 @@ export default class NextKeyBorExtension extends Extension {
             const monitor = Main.layoutManager.keyboardMonitor;
             if (!monitor)
                 return;
+            // Floating: narrower than the monitor (see lib/floating.js).
+            const floatWidth = ext._floating?.width(monitor);
+            if (floatWidth)
+                this.width = floatWidth;
             const maxHeight = monitor.height * MAX_HEIGHT_RATIO;
             const key = monitor.width > monitor.height ? 'height-landscape' : 'height-portrait';
             const base = Math.clamp(monitor.height * settings.get_int(key) / 100, minHeight, maxHeight);
             const extra = ext._uis?.get(this)?.extraHeight ?? 0;
             this._nkbBaseHeight = base;
             this.height = Math.min(base + extra, maxHeight);
+        };
+
+        // A floating keyboard does not cover the bottom edge, so windows need
+        // not move up out of its way.
+        proto.setCursorLocation = function (...args) {
+            if (ext._floating?.enabled) {
+                this._setFocusWindow(null);
+                return;
+            }
+            orig.setCursorLocation.apply(this, args);
         };
 
         // The emoji key opens NextKeyBor's searchable picker instead.
@@ -168,6 +205,7 @@ export default class NextKeyBorExtension extends Extension {
             const ui = new KeyboardUi(kb, {
                 settings: this._settings,
                 daemon: this._daemon,
+                floating: this._floating,
                 openPreferences: () => {
                     kb.close(true);
                     this.openPreferences();
