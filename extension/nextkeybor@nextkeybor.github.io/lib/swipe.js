@@ -45,6 +45,23 @@ function allLetterButtons(root, out = []) {
     return out;
 }
 
+// Centres of the letter keys on screen, {"q": [x, y], ...}, in key widths
+// so the daemon's radii mean "keys"; null when no letters are showing.
+export function letterKeyCentres(keyboard) {
+    const buttons = allLetterButtons(keyboard);
+    if (buttons.length === 0)
+        return null;
+    const widths = buttons.map(b => b.get_transformed_size()[0]).sort((a, b) => a - b);
+    const unit = widths[Math.floor(widths.length / 2)] || 1;
+    const keys = {};
+    for (const b of buttons) {
+        const [bx, by] = b.get_transformed_position();
+        const [bw, bh] = b.get_transformed_size();
+        keys[b.get_label().toLowerCase()] = [(bx + bw / 2) / unit, (by + bh / 2) / unit];
+    }
+    return {keys, unit};
+}
+
 class Trail {
     constructor() {
         this._points = []; // [x, y, time] in stage coordinates
@@ -111,7 +128,8 @@ class Trail {
 
 export class SwipeTyper {
     // onSwipe(keys, path, shifted) gets letter centres and the finger path in
-    // key-width units, and whether the keyboard showed capitals.
+    // key-width units (path points are [x, y, milliseconds since the touch
+    // began]), and whether the keyboard showed capitals.
     constructor(keyboard, {enabled, onSwipe}) {
         this._kb = keyboard;
         this._enabled = enabled;
@@ -124,6 +142,11 @@ export class SwipeTyper {
     destroy() {
         Main.layoutManager.keyboardBox.disconnect(this._eventId);
         this._trail?.destroy();
+        this._reset();
+    }
+
+    // Drop the touch being watched, if any (its key is going away).
+    reset() {
         this._reset();
     }
 
@@ -146,19 +169,23 @@ export class SwipeTyper {
         // Compare slots: each event wraps its sequence in a new JS object.
         const slot = event.get_event_sequence()?.get_slot() ?? -1;
         const [x, y] = event.get_coords();
+        const time = event.get_time();
 
         if (type === T.TOUCH_BEGIN) {
             if (this._slot !== null || !this._enabled())
                 return Clutter.EVENT_PROPAGATE;
             // A finger often lands in the gap between keys: a swipe may
-            // start there too, from the nearest letter key.
-            const pressed = letterKeyOf(global.stage.get_event_actor(event));
-            const key = pressed ?? this._nearestLetterKey(x, y);
+            // start there too, from the nearest letter key (but not from
+            // another key, such as backspace, which has slides of its own).
+            const actor = global.stage.get_event_actor(event);
+            const pressed = letterKeyOf(actor);
+            const onKey = actor?.get_parent()?.keyButton === actor;
+            const key = pressed ?? (onKey ? null : this._nearestLetterKey(x, y));
             if (key && this._kb.contains(key)) {
                 this._slot = slot;
                 this._key = key;
                 this._keyPressed = !!pressed;
-                this._points = [[x, y]];
+                this._points = [[x, y, time]];
             }
             return Clutter.EVENT_PROPAGATE;
         }
@@ -171,7 +198,7 @@ export class SwipeTyper {
             return Clutter.EVENT_PROPAGATE;
         }
 
-        this._points.push([x, y]);
+        this._points.push([x, y, time]);
         if (type === T.TOUCH_UPDATE) {
             if (!this._swiping)
                 this._maybeStart(x, y);
@@ -240,23 +267,15 @@ export class SwipeTyper {
     }
 
     _finish() {
-        const buttons = allLetterButtons(this._kb);
+        const layout = letterKeyCentres(this._kb);
         const shifted = this._kb._currentPage === this._kb._layers?.['shift'];
         const points = this._points;
         this._reset();
-        if (buttons.length === 0)
+        if (!layout)
             return;
-
-        // Normalise to key-width units so the daemon's radii mean "keys".
-        const widths = buttons.map(b => b.get_transformed_size()[0]).sort((a, b) => a - b);
-        const unit = widths[Math.floor(widths.length / 2)] || 1;
-        const keys = {};
-        for (const b of buttons) {
-            const [bx, by] = b.get_transformed_position();
-            const [bw, bh] = b.get_transformed_size();
-            keys[b.get_label().toLowerCase()] = [(bx + bw / 2) / unit, (by + bh / 2) / unit];
-        }
-        const path = points.map(([px, py]) => [px / unit, py / unit]);
+        const {keys, unit} = layout;
+        const t0 = points[0][2];
+        const path = points.map(([px, py, t]) => [px / unit, py / unit, t - t0]);
         this._onSwipe(keys, path, shifted);
     }
 }

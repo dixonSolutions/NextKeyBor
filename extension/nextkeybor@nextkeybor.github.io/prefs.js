@@ -5,14 +5,32 @@ import Gtk from 'gi://Gtk';
 
 import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
+import {appearancePage} from './lib/skinPrefs.js';
+
 const BUS_NAME = 'io.github.nextkeybor.Daemon';
 const OBJECT_PATH = '/io/github/nextkeybor/Daemon';
 
 const MODELS = ['tiny', 'base', 'small', 'medium', 'large-v3-turbo', 'large-v3', 'tiny.en', 'base.en', 'small.en'];
-const PROVIDERS = [['openverse', 'Openverse (no key)'], ['giphy', 'GIPHY'], ['klipy', 'KLIPY'], ['tenor', 'Tenor']];
+const PROVIDERS = [['openverse', 'Openverse (no key)'], ['giphy', 'GIPHY'], ['klipy', 'KLIPY']];
 const RATINGS = [['g', 'G'], ['pg', 'PG'], ['pg-13', 'PG-13'], ['r', 'R']];
 const ENGINES = [['auto', 'Automatic'], ['whisper', 'On this computer (whisper.cpp)'], ['groqtype', 'GroqType (Groq cloud)']];
 const GROQTYPE_URL = 'https://github.com/dixonSolutions/GroqType';
+const GIPHY_KEY_URL = 'https://developers.giphy.com/dashboard/?create=true';
+const KLIPY_KEY_URL = 'https://partner.klipy.com/';
+
+// Puts the key in GroqType's config (which must exist), readable by the
+// user alone.
+function saveGroqKey(key) {
+    const path = GLib.build_filenamev([GLib.get_home_dir(), '.config', 'groqtype', 'config.json']);
+    const [, bytes] = Gio.File.new_for_path(path).load_contents(null);
+    const config = JSON.parse(new TextDecoder().decode(bytes));
+    config.api_key = key;
+    const tmp = Gio.File.new_for_path(`${path}.tmp`);
+    const stream = tmp.replace(null, false, Gio.FileCreateFlags.PRIVATE | Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+    stream.write_all(new TextEncoder().encode(JSON.stringify(config, null, 2)), null);
+    stream.close(null);
+    tmp.move(Gio.File.new_for_path(path), Gio.FileCopyFlags.OVERWRITE, null, null);
+}
 
 // GroqType's CLI, wherever its installer put it.
 function groqtypePath() {
@@ -29,11 +47,73 @@ function switchRow(settings, key, title, subtitle = '') {
     return row;
 }
 
+// Editable list of text shortcuts (setting text-shortcuts, a{ss}): typing a
+// shortcut and a space types its phrase.
+function shortcutsGroup(settings) {
+    const group = new Adw.PreferencesGroup({
+        title: 'Text shortcuts',
+        description: 'Type a shortcut and a space (or punctuation) to type its phrase',
+    });
+    const rows = [];
+    const read = () => settings.get_value('text-shortcuts').deepUnpack();
+    const write = map => settings.set_value('text-shortcuts', new GLib.Variant('a{ss}', map));
+
+    const shortcut = new Adw.EntryRow({title: 'Shortcut'});
+    const phrase = new Adw.EntryRow({title: 'Phrase'});
+    const add = new Gtk.Button({icon_name: 'list-add-symbolic', valign: Gtk.Align.CENTER, tooltip_text: 'Add'});
+    add.add_css_class('flat');
+    phrase.add_suffix(add);
+    const addShortcut = () => {
+        const key = shortcut.text.trim();
+        if (!key || /\s/.test(key) || !phrase.text.trim())
+            return;
+        write({...read(), [key]: phrase.text.trim()});
+        shortcut.text = '';
+        phrase.text = '';
+    };
+    add.connect('clicked', addShortcut);
+    phrase.connect('entry-activated', addShortcut);
+    group.add(shortcut);
+    group.add(phrase);
+
+    const sync = () => {
+        for (const row of rows.splice(0))
+            group.remove(row);
+        for (const [key, text] of Object.entries(read()).sort()) {
+            const row = new Adw.ActionRow({title: GLib.markup_escape_text(key, -1), subtitle: GLib.markup_escape_text(text, -1)});
+            const remove = new Gtk.Button({icon_name: 'user-trash-symbolic', valign: Gtk.Align.CENTER, tooltip_text: 'Remove'});
+            remove.add_css_class('flat');
+            remove.connect('clicked', () => {
+                const map = read();
+                delete map[key];
+                write(map);
+            });
+            row.add_suffix(remove);
+            group.add(row);
+            rows.push(row);
+        }
+    };
+    const changedId = settings.connect('changed::text-shortcuts', sync);
+    group.connect('destroy', () => settings.disconnect(changedId));
+    sync();
+    return group;
+}
+
 function entryRow(settings, key, title, password = false) {
     const row = password
         ? new Adw.PasswordEntryRow({title})
         : new Adw.EntryRow({title});
     settings.bind(key, row, 'text', Gio.SettingsBindFlags.DEFAULT);
+    return row;
+}
+
+// A button on a row that opens a web page, e.g. where to get an API key.
+function addLink(row, label, uri) {
+    const button = new Gtk.Button({label, valign: Gtk.Align.CENTER, tooltip_text: uri});
+    button.add_css_class('flat');
+    button.connect('clicked', () =>
+        new Gtk.UriLauncher({uri}).launch(row.get_root(), null, null));
+    row.add_suffix(button);
     return row;
 }
 
@@ -97,6 +177,11 @@ export default class NextKeyBorPreferences extends ExtensionPreferences {
         statusGroup.add(kbRow);
         general.add(statusGroup);
 
+        const topBar = new Adw.PreferencesGroup({title: 'Top bar'});
+        topBar.add(switchRow(settings, 'show-indicator', 'Show icon in the top bar',
+            'Tap it to show or hide the keyboard; hold for more. Off hides the icon.'));
+        general.add(topBar);
+
         // Filled in with the GroqType section on the Dictation page.
         let syncGroq = () => {};
         const updateStatus = async () => {
@@ -114,6 +199,7 @@ export default class NextKeyBorPreferences extends ExtensionPreferences {
                 kbRow.subtitle = [
                     k.physical?.length ? k.physical.join(', ') : 'none',
                     k.tablet_mode ? 'tablet mode' : null,
+                    k.unreadable_devices ? 'can\u2019t read input devices (join the \u201cinput\u201d group)' : null,
                     `OSK ${k.osk_enabled ? 'on' : 'off'}`,
                 ].filter(Boolean).join(' · ');
             } catch (e) {
@@ -135,7 +221,9 @@ export default class NextKeyBorPreferences extends ExtensionPreferences {
 
         const auto = new Adw.PreferencesGroup({
             title: 'Physical keyboard detection',
-            description: 'System-wide: the daemon watches all input devices and the tablet-mode switch.',
+            description: 'System-wide: the daemon watches all input devices and the tablet-mode switch. ' +
+                'Needs your account in the "input" group, which lets every program you run read all key presses ' +
+                '(passwords too); see the README before turning this on.',
         });
         auto.add(switchRow(settings, 'auto-toggle-osk', 'Automatic on-screen keyboard',
             'Enable it only when no physical keyboard is usable'));
@@ -148,25 +236,51 @@ export default class NextKeyBorPreferences extends ExtensionPreferences {
         window.add(typing);
         const sugg = new Adw.PreferencesGroup({title: 'Suggestions'});
         sugg.add(switchRow(settings, 'suggestions-enabled', 'Word suggestions'));
+        sugg.add(switchRow(settings, 'autocorrect', 'Autocorrect',
+            'Fix clear typos when you finish a word; Backspace right after puts back what you typed'));
         sugg.add(switchRow(settings, 'auto-space', 'Add a space after a suggestion'));
+        sugg.add(switchRow(settings, 'emoji-suggestions', 'Emoji suggestions',
+            'Offer an emoji for the word you just typed ("pizza" → 🍕)'));
+        sugg.add(switchRow(settings, 'double-space-period', 'Double-tap space for a period'));
         sugg.add(switchRow(settings, 'learn-words', 'Learn new words', 'Stored only on this computer; never in password fields'));
         sugg.add(entryRow(settings, 'active-language', 'Dictionary language (e.g. en_US, pl_PL)'));
         typing.add(sugg);
+        typing.add(shortcutsGroup(settings));
         const holds = new Adw.PreferencesGroup({title: 'Keys'});
         holds.add(switchRow(settings, 'hold-for-numbers', 'Hold for numbers and symbols',
             'Long-press the top row for digits, other letters for symbols'));
+        holds.add(switchRow(settings, 'number-row', 'Number row',
+            'A row of digits above the letters; hold a digit for fractions and superscripts'));
         holds.add(switchRow(settings, 'swipe-typing', 'Swipe typing',
             'Slide across the letters to type a word; lift to finish'));
+        holds.add(switchRow(settings, 'key-popups', 'Key popups',
+            'Show the character above a key while you press it'));
+        holds.add(switchRow(settings, 'key-sound', 'Key click sound',
+            'A click on each key press; silent when alert sounds are off in Settings \u2192 Sound'));
+        holds.add(switchRow(settings, 'space-cursor', 'Move the cursor with the space bar',
+            'Slide along the space bar to move the text cursor'));
+        holds.add(switchRow(settings, 'backspace-swipe', 'Delete words by sliding from backspace',
+            'Slide left from the backspace key to pick words to delete, back right for fewer; lift to delete'));
+        holds.add(switchRow(settings, 'swipe-log', 'Log swipes to improve swipe typing',
+            'Keeps your swipes and the words you meant in ~/.local/share/nextkeybor; never sent anywhere'));
+        holds.add(switchRow(settings, 'clipboard-history', 'Clipboard history',
+            'The last texts you copied, to paste from the keyboard; kept in memory only, never on disk. Passwords are skipped only from KeePassXC and KDE'));
+        holds.add(switchRow(settings, 'split-landscape', 'Split keyboard in landscape',
+            'Two halves at the screen edges, for typing with both thumbs'));
+        holds.add(comboRow(settings, 'one-handed', 'One-handed mode',
+            [['off', 'Off'], ['left', 'Left'], ['right', 'Right']],
+            'A narrower keyboard on one side; also from holding the settings button on the keyboard'));
         holds.add(switchRow(settings, 'floating', 'Floating keyboard',
             'A panel you drag by its top bar; it opens where you left it'));
         holds.add(spinRow(settings, 'float-width', 'Floating width', 30, 100, 'Percent of the screen width'));
-        holds.add(switchRow(settings, 'show-indicator', 'Keyboard button in the top bar',
-            'Tap to show or hide the keyboard; hold for more'));
         holds.add(spinRow(settings, 'height-landscape', 'Height in landscape', 15, 60,
             'Percent of the screen; you can also drag the handle on top of the keyboard'));
         holds.add(spinRow(settings, 'height-portrait', 'Height in portrait', 15, 60,
             'Percent of the screen'));
         typing.add(holds);
+
+        // --- Appearance
+        window.add(appearancePage(window, settings, this.dir));
 
         // --- Dictation
         const speech = new Adw.PreferencesPage({title: 'Dictation', icon_name: 'audio-input-microphone-symbolic'});
@@ -206,12 +320,23 @@ export default class NextKeyBorPreferences extends ExtensionPreferences {
             const key = groqKey.text.trim();
             if (!program || !key)
                 return;
-            const proc = Gio.Subprocess.new([program, 'config', 'api-key', key],
+            // Not `groqtype config api-key KEY`: a command line is visible to
+            // every user on the machine. GroqType creates its config, then
+            // the key goes into it here.
+            const proc = Gio.Subprocess.new([program, 'config-show'],
                 Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_PIPE);
             proc.communicate_utf8_async(null, null, (p, res) => {
                 const [, , err] = p.communicate_utf8_finish(res);
+                let error = p.get_successful() ? null : err?.trim() || 'groqtype failed';
+                if (!error) {
+                    try {
+                        saveGroqKey(key);
+                    } catch (e) {
+                        error = e.message;
+                    }
+                }
                 groqKey.text = '';
-                groqStatus.subtitle = p.get_successful() ? 'API key saved' : `Could not save the key: ${err?.trim()}`;
+                groqStatus.subtitle = error ? `Could not save the key: ${error}` : 'API key saved';
                 updateStatus();
             });
         });
@@ -235,12 +360,11 @@ export default class NextKeyBorPreferences extends ExtensionPreferences {
         window.add(gifs);
         const prov = new Adw.PreferencesGroup({
             title: 'Online GIFs and stickers',
-            description: 'Openverse works without a key but has few reaction GIFs. For GIPHY or KLIPY, get a free key at developers.giphy.com or partner.klipy.com; until a key is set, searches use Openverse. Favourites and your own GIFs work offline.',
+            description: 'Openverse works without a key but has few reaction GIFs. For GIPHY or KLIPY, use Get a key to sign up and create one; until a key is set, searches use Openverse. Favourites and your own GIFs work offline.',
         });
         prov.add(comboRow(settings, 'gif-provider', 'Provider', PROVIDERS));
-        prov.add(entryRow(settings, 'giphy-api-key', 'GIPHY API key', true));
-        prov.add(entryRow(settings, 'klipy-api-key', 'KLIPY API key', true));
-        prov.add(entryRow(settings, 'tenor-api-key', 'Tenor API key', true));
+        prov.add(addLink(entryRow(settings, 'giphy-api-key', 'GIPHY API key', true), 'Get a key', GIPHY_KEY_URL));
+        prov.add(addLink(entryRow(settings, 'klipy-api-key', 'KLIPY API key', true), 'Get a key', KLIPY_KEY_URL));
         prov.add(comboRow(settings, 'gif-content-rating', 'Content rating', RATINGS));
         prov.add(spinRow(settings, 'gif-cache-mb', 'Cache size (MB)', 20, 5000));
         gifs.add(prov);

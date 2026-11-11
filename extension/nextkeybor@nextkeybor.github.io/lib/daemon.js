@@ -128,9 +128,26 @@ export class DaemonClient extends Signals.EventEmitter {
         return words;
     }
 
+    async autocorrect(context, language) {
+        const [replacement] = await this._call('Autocorrect', context, language);
+        return replacement;
+    }
+
+    setKeyLayout(keys) {
+        return this._call('SetKeyLayout', JSON.stringify(keys));
+    }
+
+    acceptWord(word) {
+        return this._call('AcceptWord', word);
+    }
+
     async swipeWords(context, language, keys, path, max) {
         const [words] = await this._call('SwipeWords', context, language, keys, path, max);
         return words;
+    }
+
+    logSwipe(entry) {
+        return this._call('LogSwipe', JSON.stringify(entry));
     }
 
     learnText(text, language) {
@@ -159,6 +176,11 @@ export class DaemonClient extends Signals.EventEmitter {
     async searchEmoji(query, max) {
         const [json] = await this._call('SearchEmoji', query, max);
         return parseJson(json, []);
+    }
+
+    async emojiForWord(word) {
+        const [emoji] = await this._call('EmojiForWord', word);
+        return emoji;
     }
 
     noteEmojiUsed(emoji) {

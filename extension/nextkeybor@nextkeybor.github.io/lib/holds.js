@@ -55,6 +55,44 @@ export function augmentRow(keys, rowIndex, levelMode) {
     }
 }
 
+// Long-press on the number row: superscripts and fractions, as on Gboard.
+const DIGIT_VARIANTS = {
+    '1': ['¹', '½', '⅓', '¼', '⅛'],
+    '2': ['²', '⅔'],
+    '3': ['³', '¾', '⅜'],
+    '4': ['⁴'],
+    '5': ['⅝'],
+    '7': ['⅞'],
+    '0': ['ⁿ', '∅'],
+};
+
+// The keys of a row of digits 1–0 to put above this row, lined up with its
+// letters (the stock letter levels have no number row), or null when the row
+// is not the top letter row. `rowIndex` and `levelMode` as for augmentRow.
+export function numberRowFor(keys, rowIndex, levelMode) {
+    if (rowIndex !== 1 || (levelMode !== 'default' && levelMode !== 'latched'))
+        return null;
+    const first = keys.findIndex(isLetterKey);
+    if (first < 0 || keys.filter(isLetterKey).length < 7)
+        return null;
+    const offset = keys.slice(0, first).reduce((sum, k) => sum + (k.width ?? 1), 0);
+    return TOP_ROW.map((digit, i) => ({
+        strings: [digit, ...(DIGIT_VARIANTS[digit] ?? [])],
+        leftOffset: i === 0 ? offset : 0,
+    }));
+}
+
+// The stock URL layout's "www." key: a tap types ".com", the long-press popup
+// offers other common endings, and keeps "www.".
+const URL_ENDINGS = ['.com', '.org', '.net', '.io', '.dev', 'www.'];
+
+export function replaceWwwKey(keys) {
+    for (const key of keys) {
+        if (!key.action && key.strings?.length === 1 && key.strings[0] === 'www.')
+            key.strings = [...URL_ENDINGS];
+    }
+}
+
 // Widen the space bar and centre it: the stock letter rows put it left of
 // centre (the hide key is wider than ?123). Keys sit on a half-key grid, so
 // the outermost key on each side gets 1.5 and the others 1.
@@ -80,4 +118,36 @@ export function centreSpaceBar(keys) {
     fill(left, true);
     fill(right, false);
     keys[space].width = width;
+}
+
+// Split keyboard: rows split at the key boundary nearest this fraction of
+// their width (qwert|yuiop, asdfg|hjkl, zxcv|bnm on the stock layouts).
+export const SPLIT_AT = 0.46;
+
+export function rowWidth(keys) {
+    return keys.reduce((sum, k) => sum + (k.leftOffset ?? 0) + (k.width ?? 1), 0);
+}
+
+// Where to split the row: the index of the first key of its right half,
+// at the key boundary nearest column `at`, or -1. A space bar across that
+// column becomes two, one on each side of the split.
+export function splitRow(keys, at) {
+    let column = 0, best = -1, bestDistance = Infinity;
+    for (let i = 0; i < keys.length; i++) {
+        const key = keys[i];
+        const start = column + (key.leftOffset ?? 0);
+        const end = start + (key.width ?? 1);
+        if (key.strings?.[0] === ' ' && !key.action && start < at && end > at) {
+            const cut = Math.clamp(Math.round(at * 2) / 2, start + 0.5, end - 0.5);
+            key.width = cut - start;
+            keys.splice(i + 1, 0, {...key, strings: [...key.strings], width: end - cut, leftOffset: 0});
+            return i + 1;
+        }
+        if (i > 0 && Math.abs(start - at) < bestDistance) {
+            best = i;
+            bestDistance = Math.abs(start - at);
+        }
+        column = end;
+    }
+    return best;
 }

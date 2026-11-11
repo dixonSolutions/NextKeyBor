@@ -6,7 +6,7 @@
 
   All JSON strings are UTF-8 JSON documents; shapes are documented per method.
   Media item JSON (GIFs, stickers, own uploads):
-    {"id": "giphy:abc", "source": "giphy|tenor|klipy|openverse|local", "kind": "gif|sticker",
+    {"id": "giphy:abc", "source": "giphy|klipy|openverse|local", "kind": "gif|sticker",
      "title": "...", "preview": "/abs/path/to/cached/thumb.gif" or "",
      "preview_url": "https://...", "url": "https://... full gif", "favorite": true}
   "preview" is filled once the thumbnail is in the local cache; if it is empty,
@@ -21,11 +21,13 @@
              "recording": bool, "language": "auto"},
             "gif_provider": "giphy", "gif_provider_ready": bool,
             "keyboard": {"physical": ["Name", ...], "tablet_mode": bool, "osk_enabled": bool,
-                         "auto_toggle": bool}} -->
+                         "auto_toggle": bool, "unreadable_devices": int}} -->
       <arg direction="out" type="s" name="status_json"/>
     </method>
 
-    <!-- ===== Speech to text (whisper.cpp) ===== -->
+    <!-- ===== Speech to text (whisper.cpp) =====
+         Only GNOME Shell (the owner of org.gnome.Shell) may call the dictation methods, and
+         the Dictation* signals go to the connection that started the dictation alone. -->
     <method name="StartDictation">
       <!-- language: "auto" or an ISO-639-1 code such as "en", "pl"; "" = use setting -->
       <arg direction="in" type="s" name="language"/>
@@ -80,15 +82,38 @@
       <arg direction="out" type="as" name="suggestions"/>
     </method>
     <method name="SwipeWords">
-      <!-- Swipe typing. keys: {"q": [x, y], ...} letter key centres; path: [[x, y], ...] finger
-           path; both in units of one letter key width. context: text before the cursor.
-           Returns up to max words, best first. -->
+      <!-- Swipe typing. keys: {"q": [x, y], ...} letter key centres; path: [[x, y, t], ...]
+           finger path, t in milliseconds (optional); positions in units of one letter key
+           width. context: text before the cursor. Returns up to max words, best first. -->
       <arg direction="in" type="s" name="context"/>
       <arg direction="in" type="s" name="language"/>
       <arg direction="in" type="s" name="keys"/>
       <arg direction="in" type="s" name="path"/>
       <arg direction="in" type="u" name="max"/>
       <arg direction="out" type="as" name="words"/>
+    </method>
+    <method name="Autocorrect">
+      <!-- What the word being typed at the end of context should become when it is finished
+           with a space or punctuation: a text shortcut's phrase, or a confident correction.
+           Empty to leave it as typed. -->
+      <arg direction="in" type="s" name="context"/>
+      <arg direction="in" type="s" name="language"/>
+      <arg direction="out" type="s" name="replacement"/>
+    </method>
+    <method name="SetKeyLayout">
+      <!-- The letter keys on screen, {"q": [x, y], ...} in units of one key width, as for
+           SwipeWords. Corrections then favour slips onto neighbouring keys. QWERTY until set. -->
+      <arg direction="in" type="s" name="keys"/>
+    </method>
+    <method name="AcceptWord">
+      <!-- The user undid a correction of this word: never correct it again. -->
+      <arg direction="in" type="s" name="word"/>
+    </method>
+    <method name="LogSwipe">
+      <!-- With the swipe-log setting on, appends one swipe ({"word", "keys", "path",
+           "context", ...} as JSON) to swipe-log.jsonl in the data directory, for tuning the
+           matcher (nextkeybord's swipe-bench option). Does nothing when the setting is off. -->
+      <arg direction="in" type="s" name="entry"/>
     </method>
     <method name="LearnText">
       <!-- Feed committed text (words, bigrams) into the user's personal dictionary. -->
@@ -122,6 +147,12 @@
       <arg direction="in" type="s" name="query"/>
       <arg direction="in" type="u" name="max"/>
       <arg direction="out" type="s" name="results_json"/>
+    </method>
+    <method name="EmojiForWord">
+      <!-- The emoji to offer after a finished word: one named after it ("pizza" -> 🍕), else the
+           most used or popular one tagged with it. "" when there is none. -->
+      <arg direction="in" type="s" name="word"/>
+      <arg direction="out" type="s" name="emoji"/>
     </method>
     <method name="NoteEmojiUsed">
       <arg direction="in" type="s" name="emoji"/>

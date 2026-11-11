@@ -1,14 +1,19 @@
 // NextKeyBor: extends the GNOME Shell on-screen keyboard.
 
+import St from 'gi://St';
+
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {Keyboard} from 'resource:///org/gnome/shell/ui/keyboard.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
+import {ClipboardHistory} from './lib/clipboard.js';
 import {DaemonClient} from './lib/daemon.js';
 import {Floating, KeyboardIndicator} from './lib/floating.js';
-import {TapFix, updateLevelFromHints} from './lib/fixes.js';
-import {augmentRow, centreSpaceBar} from './lib/holds.js';
+import {TapFix, closeKeyPopups, updateLevelFromHints} from './lib/fixes.js';
+import {SPLIT_AT, augmentRow, centreSpaceBar, numberRowFor, replaceWwwKey, rowWidth, splitRow} from './lib/holds.js';
 import {KeyboardUi, MAX_HEIGHT_RATIO} from './lib/keyboardUi.js';
+import {oneHandedWidth, splitGap} from './lib/layoutModes.js';
+import {SkinLoader} from './lib/skinLoader.js';
 
 // Earlier single-purpose fixes that NextKeyBor includes; running both would
 // open the keyboard twice.
@@ -18,6 +23,7 @@ export default class NextKeyBorExtension extends Extension {
     enable() {
         this._settings = this.getSettings();
         this._daemon = new DaemonClient(this.dir);
+        this._clipboard = new ClipboardHistory(this._settings);
         this._uis = new Map(); // Keyboard -> KeyboardUi
         this._tapFix = null;
 
@@ -29,13 +35,14 @@ export default class NextKeyBorExtension extends Extension {
         }
 
         this._floating = new Floating(this._settings);
+        this._skins = new SkinLoader(this._settings, this.dir);
         this._patchKeyboard();
         this._syncIndicator();
 
         this._settings.connectObject('changed', (_s, key) => {
             if (key === 'chromium-tap-fix')
                 this._syncTapFix();
-            else if (key === 'hold-for-numbers')
+            else if (key === 'hold-for-numbers' || key === 'number-row' || key === 'split-landscape')
                 this._rebuildKeys();
             else if (key === 'height-landscape' || key === 'height-portrait')
                 Main.keyboard._keyboard?._relayout();
@@ -68,11 +75,15 @@ export default class NextKeyBorExtension extends Extension {
         this._unpatchKeyboard();
         this._floating.destroy();
         this._floating = null;
+        this._skins.destroy();
+        this._skins = null;
         this._rebuildKeys();
         Main.keyboard._keyboard?._relayout();
 
         this._daemon.destroy();
         this._daemon = null;
+        this._clipboard.destroy();
+        this._clipboard = null;
         this._settings = null;
         this._uis = null;
     }
@@ -116,6 +127,7 @@ export default class NextKeyBorExtension extends Extension {
             _setupKeyboard: proto._setupKeyboard,
             _relayout: proto._relayout,
             _addRowKeys: proto._addRowKeys,
+            _updateKeys: proto._updateKeys,
             _updateLevelFromHints: proto._updateLevelFromHints,
             _toggleEmoji: proto._toggleEmoji,
             setCursorLocation: proto.setCursorLocation,
@@ -138,9 +150,11 @@ export default class NextKeyBorExtension extends Extension {
             if (!monitor)
                 return;
             // Floating: narrower than the monitor (see lib/floating.js).
-            const floatWidth = ext._floating?.width(monitor);
-            if (floatWidth)
-                this.width = floatWidth;
+            // One-handed: narrower, beside its strip (see lib/layoutModes.js).
+            const width = ext._floating?.width(monitor) ??
+                oneHandedWidth(this, monitor, settings, ext._floating);
+            if (width)
+                this.width = width;
             const maxHeight = monitor.height * MAX_HEIGHT_RATIO;
             const key = monitor.width > monitor.height ? 'height-landscape' : 'height-portrait';
             const base = Math.clamp(monitor.height * settings.get_int(key) / 100, minHeight, maxHeight);
@@ -168,23 +182,104 @@ export default class NextKeyBorExtension extends Extension {
                 orig._toggleEmoji.apply(this, args);
         };
 
+        // Rebuilding the keys (settings, layout or text field changes) must
+        // not leave a popup or a half-finished gesture on keys that are gone.
+        proto._updateKeys = function (...args) {
+            try {
+                ext._uis?.get(this)?.resetGestures();
+                closeKeyPopups(this);
+            } catch (e) {
+                console.error(`NextKeyBor: closing key popups failed: ${e}`);
+            }
+            const result = orig._updateKeys.apply(this, args);
+            // Letter rows as the layout file has them, for the split gap.
+            const letters = this._layers?.['default'];
+            if (letters)
+                this._nkbLetterRows = letters._nRows - (letters._nkbAddedRows ?? 0);
+            return result;
+        };
+
         proto._addRowKeys = function (keys, layout, ...rest) {
             try {
                 centreSpaceBar(keys);
             } catch (e) {
                 console.error(`NextKeyBor: space bar layout failed: ${e}`);
             }
+            try {
+                replaceWwwKey(keys);
+            } catch (e) {
+                console.error(`NextKeyBor: www. key replacement failed: ${e}`);
+            }
+            // Split keyboard: the same gap in every row of a level, sized
+            // from its first row.
+            if (layout._nkbSplit === undefined) {
+                const width = rowWidth(keys);
+                let gap = 0;
+                try {
+                    const letters = layout.mode === 'default' || layout.mode === 'latched';
+                    gap = splitGap(this, settings, ext._floating, width,
+                        letters && settings.get_boolean('number-row'));
+                } catch (e) {
+                    console.error(`NextKeyBor: split keyboard failed: ${e}`);
+                }
+                layout._nkbSplit = gap ? {at: width * SPLIT_AT, gap} : null;
+                if (layout.mode === 'default') {
+                    this._nkbSplitGap = gap;
+                    this._nkbSplitWidth = width;
+                }
+            }
+            const split = layout._nkbSplit;
+            // The halves go in with an empty widget between them: the key
+            // grid gives columns with nothing in them no width.
+            const addRow = row => {
+                let at = -1;
+                try {
+                    at = split ? splitRow(row, split.at) : -1;
+                } catch (e) {
+                    console.error(`NextKeyBor: split keyboard failed: ${e}`);
+                }
+                if (at <= 0)
+                    return orig._addRowKeys.call(this, row, layout, ...rest);
+                orig._addRowKeys.call(this, row.slice(0, at), layout, ...rest);
+                layout.appendKey(new St.Widget({reactive: false}), split.gap);
+                return orig._addRowKeys.call(this, row.slice(at), layout, ...rest);
+            };
+            // Rows as the layout file counts them, before any number row.
+            let row = layout._nRows - (layout._nkbAddedRows ?? 0);
+            if (settings.get_boolean('number-row')) {
+                try {
+                    const digits = numberRowFor(keys, row, layout.mode);
+                    if (digits) {
+                        addRow(digits);
+                        layout.appendRow();
+                        layout._nkbAddedRows = (layout._nkbAddedRows ?? 0) + 1;
+                        row = layout._nRows - layout._nkbAddedRows;
+                    }
+                } catch (e) {
+                    console.error(`NextKeyBor: number row failed: ${e}`);
+                }
+            }
             if (settings.get_boolean('hold-for-numbers')) {
                 try {
-                    augmentRow(keys, layout._nRows, layout.mode);
+                    augmentRow(keys, row, layout.mode);
                 } catch (e) {
                     console.error(`NextKeyBor: long-press variants failed: ${e}`);
                 }
             }
-            return orig._addRowKeys.call(this, keys, layout, ...rest);
+            return addRow(keys);
         };
 
         proto._updateLevelFromHints = function (...args) {
+            // As on Gboard, the ?123 page stays up while typing digits and
+            // symbols, and a space goes back to the letters.
+            const [userInputHappened] = args;
+            const symbols = this._currentPage &&
+                (this._currentPage === this._layers?.['opt'] || this._currentPage === this._layers?.['opt+shift']);
+            if (userInputHappened && symbols && !this._latched) {
+                if (this._nkbLastCommit !== ' ')
+                    return undefined;
+                this._setActiveLevel('default');
+            }
             if (settings.get_boolean('fix-auto-capitalization'))
                 return updateLevelFromHints.apply(this, args);
             return orig._updateLevelFromHints.apply(this, args);
@@ -205,7 +300,9 @@ export default class NextKeyBorExtension extends Extension {
             const ui = new KeyboardUi(kb, {
                 settings: this._settings,
                 daemon: this._daemon,
+                clipboard: this._clipboard,
                 floating: this._floating,
+                soundFile: this.dir.get_child('sounds').get_child('key-click.wav'),
                 openPreferences: () => {
                     kb.close(true);
                     this.openPreferences();

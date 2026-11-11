@@ -50,6 +50,23 @@
       <default>true</default>
       <summary>Insert a space after picking a suggestion</summary>
     </key>
+    <key name="autocorrect" type="b">
+      <default>true</default>
+      <summary>Fix clear typos when a word is finished with a space or punctuation</summary>
+      <description>Backspace right after a correction puts back what you typed, and that word is not corrected again.</description>
+    </key>
+    <key name="text-shortcuts" type="a{ss}">
+      <default>{'omw': 'On my way!'}</default>
+      <summary>Text shortcuts: typing the shortcut and a space types the phrase</summary>
+    </key>
+    <key name="emoji-suggestions" type="b">
+      <default>true</default>
+      <summary>Offer an emoji for the word just typed in the suggestion bar</summary>
+    </key>
+    <key name="double-space-period" type="b">
+      <default>true</default>
+      <summary>Double-tap the space bar to type a period and a space</summary>
+    </key>
     <key name="learn-words" type="b">
       <default>true</default>
       <summary>Learn words you type (stored locally only)</summary>
@@ -58,9 +75,40 @@
       <default>true</default>
       <summary>Long-press top-row letters for digits and other keys for symbols</summary>
     </key>
+    <key name="number-row" type="b">
+      <default>false</default>
+      <summary>Show a row of digits above the letters</summary>
+    </key>
     <key name="swipe-typing" type="b">
       <default>true</default>
       <summary>Type words by sliding across the letters</summary>
+    </key>
+    <key name="key-popups" type="b">
+      <default>true</default>
+      <summary>Show the character above a key while it is pressed</summary>
+    </key>
+    <key name="space-cursor" type="b">
+      <default>true</default>
+      <summary>Slide along the space bar to move the text cursor</summary>
+    </key>
+    <key name="backspace-swipe" type="b">
+      <default>true</default>
+      <summary>Slide left from the backspace key to delete whole words</summary>
+    </key>
+    <key name="key-sound" type="b">
+      <default>false</default>
+      <summary>Play a click on each key press</summary>
+      <description>Uses GNOME's sound player, so it is silent when alert sounds are off in Settings → Sound.</description>
+    </key>
+    <key name="swipe-log" type="b">
+      <default>false</default>
+      <summary>Keep a local log of swipes and the words they were meant to be</summary>
+      <description>Saved to ~/.local/share/nextkeybor/swipe-log.jsonl and never sent anywhere; used to measure and tune swipe typing. Each entry has the swipe, the word meant and the two words before it. Past 5 MB the file starts again, keeping the previous one as swipe-log.old.jsonl.</description>
+    </key>
+    <key name="clipboard-history" type="b">
+      <default>true</default>
+      <summary>Keep the last texts you copied, in memory only, to paste from the keyboard</summary>
+      <description>Nothing is written to disk; the list is gone when you log out. Copies that a password manager marks as secret (KeePassXC, KDE) are skipped, but most password managers and browsers don't mark them.</description>
     </key>
     <key name="floating" type="b">
       <default>false</default>
@@ -70,6 +118,24 @@
       <range min="30" max="100"/>
       <default>60</default>
       <summary>Floating keyboard width, in percent of the screen width</summary>
+    </key>
+    <key name="split-landscape" type="b">
+      <default>false</default>
+      <summary>In landscape, split the keys into two halves at the screen edges, for typing with both thumbs</summary>
+    </key>
+    <key name="one-handed" type="s">
+      <choices>
+        <choice value='off'/>
+        <choice value='left'/>
+        <choice value='right'/>
+      </choices>
+      <default>'off'</default>
+      <summary>One-handed mode: a narrower docked keyboard on the left or right edge</summary>
+    </key>
+    <key name="skin" type="s">
+      <default>'shell'</default>
+      <summary>Keyboard skin</summary>
+      <description>'shell' follows the shell theme; a built-in skin (light, dark, high-contrast, nord, catppuccin-mocha); 'pywal' for pywal's colours; or 'user/FILE' for a .json or .css file in ~/.local/share/nextkeybor/skins.</description>
     </key>
     <key name="float-x" type="d">
       <default>-1</default>
@@ -110,7 +176,6 @@
     <key name="gif-provider" type="s">
       <choices>
         <choice value='giphy'/>
-        <choice value='tenor'/>
         <choice value='klipy'/>
         <choice value='openverse'/>
       </choices>
@@ -120,10 +185,6 @@
     <key name="giphy-api-key" type="s">
       <default>''</default>
       <summary>GIPHY API key (free at developers.giphy.com)</summary>
-    </key>
-    <key name="tenor-api-key" type="s">
-      <default>''</default>
-      <summary>Tenor API key (Google Cloud)</summary>
     </key>
     <key name="klipy-api-key" type="s">
       <default>''</default>
@@ -146,7 +207,7 @@
 
     <!-- Physical keyboard detection -->
     <key name="auto-toggle-osk" type="b">
-      <default>true</default>
+      <default>false</default>
       <summary>Enable the OSK only when no physical keyboard is usable</summary>
     </key>
     <key name="hide-osk-on-typing" type="b">
